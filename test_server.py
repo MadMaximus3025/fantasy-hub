@@ -9,12 +9,12 @@ NOW = datetime(2026, 11, 18, 12)  # noon, before tonight's 7pm games
 MON = TODAY - timedelta(days=2)
 
 
-def player(pid, name, game_days, injury="ACTIVE", **avg):
+def player(pid, name, game_days, injury="ACTIVE", slot="BE", **avg):
     sched = {str(i): {"team": "BOS", "date": datetime.combine(MON + timedelta(days=d), datetime.min.time()).replace(hour=19)}
              for i, d in enumerate(game_days)}
     avg = {"FGM": 8, "FGA": 16, "FTM": 4, "FTA": 5, "PTS": 22, "REB": 6, "AST": 5,
            "STL": 1, "BLK": 1, "3PM": 2, "TO": 3, **avg}
-    return NS(playerId=pid, name=name, year=2027, schedule=sched, injuryStatus=injury,
+    return NS(playerId=pid, name=name, year=2027, schedule=sched, injuryStatus=injury, lineupSlot=slot,
               eligibleSlots=["PG", "SG", "G", "UT"], proTeam="ATL",
               stats={"2027_total": {"avg": avg}},
               nine_cat_averages={k: v for k, v in avg.items() if k in server.CATS})
@@ -46,6 +46,22 @@ assert d["projection"]["mine"]["FG%"] == 0.5
 r = d["projection"]["result"]
 assert r["PTS"] == "W" and r["TO"] == "L" and r["FG%"] == "T", r
 assert d["roster"][0]["news"][0]["headline"] == "h"
+
+# IR slot never counts, even when only day-to-day
+assert not server.plays(player(8, "IR guy", [3], injury="DAY_TO_DAY", slot="IR"))
+assert server.plays(player(8, "DTD guy", [3], injury="DAY_TO_DAY"))
+
+# ESPN login failure -> clear 502 message instead of a raw 500
+import os
+from fastapi import HTTPException
+os.environ["LEAGUE_ID"] = "1"
+real_league, server.League = server.League, lambda **kw: (_ for _ in ()).throw(Exception("espn_s2 and swid are required"))
+server._cache["data"] = None
+try:
+    server.dashboard(refresh=True); assert False
+except HTTPException as e:
+    assert e.status_code == 502 and "ESPN_S2" in e.detail, e.detail
+server.League = real_league
 
 # after tonight's games: Wednesday is already in the current totals, so it is not projected again
 late = server.project(me.roster, cats, datetime(2026, 11, 18, 23), MON + timedelta(days=6))

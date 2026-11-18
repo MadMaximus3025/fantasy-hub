@@ -49,7 +49,8 @@ def game_dates(player, start, end):
 
 
 def plays(player):
-    return player.injuryStatus != "OUT"
+    # IR-slot players can't score for you even when listed day-to-day
+    return player.injuryStatus != "OUT" and player.lineupSlot != "IR"
 
 
 def season_avg(player):
@@ -180,12 +181,15 @@ def dashboard(refresh: bool = False):
         return _cache["data"]
     if not os.environ.get("LEAGUE_ID"):
         raise HTTPException(500, "LEAGUE_ID not set. Copy .env.example to .env and fill it in.")
-    league = League(
-        league_id=int(os.environ["LEAGUE_ID"]),
-        year=current_season(),
-        espn_s2=os.environ.get("ESPN_S2") or None,
-        swid=os.environ.get("SWID") or None,
-    )
+    try:
+        league = League(
+            league_id=int(os.environ["LEAGUE_ID"]),
+            year=current_season(),
+            espn_s2=os.environ.get("ESPN_S2") or None,
+            swid=os.environ.get("SWID") or None,
+        )
+    except Exception as e:
+        raise HTTPException(502, f"ESPN refused the request ({e}). Check LEAGUE_ID, ESPN_S2 and SWID; the cookies expire.")
     me = find_my_team(league, os.environ.get("TEAM_ID"), os.environ.get("SWID"))
     data = build_dashboard(league, me, datetime.now(), player_news(league, me.roster))
     _cache.update(at=time.time(), data=data)

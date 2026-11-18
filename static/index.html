@@ -174,7 +174,7 @@ function projectionCard(d) {
 async function load(refresh = false) {
   try {
     const r = await fetch("/api/dashboard" + (refresh ? "?refresh=true" : ""));
-    const d = await r.json();
+    const d = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));  // non-JSON error pages
     if (!r.ok) throw new Error(d.detail || r.statusText);
     $("#team").innerHTML = `${esc(d.team)}<small>${esc(d.league)}</small>`;
     $("#app").innerHTML = rosterCard(d) + `<div class="stack">${slateCard(d)}${projectionCard(d)}</div>`;
