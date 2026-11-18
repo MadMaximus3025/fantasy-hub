@@ -60,4 +60,19 @@ assert server.tldr(raw) == "Johnson scored 30 points vs. Miami.", server.tldr(ra
 assert server.tldr(None) == ""
 long = server.tldr("word " * 100)
 assert len(long) <= 181 and long.endswith("…")
+# head-to-head: only regular season + postseason, site team codes mapped, newest first
+def ev(eid, opp, day):
+    return eid, {"opponent": {"abbreviation": opp}, "gameDate": f"2026-{day}T23:00:00.000+00:00", "atVs": "@", "gameResult": "W", "score": "110-100"}
+labels = ["MIN", "FG", "FG%", "3PT", "3P%", "FT", "FT%", "REB", "AST", "BLK", "STL", "PF", "TO", "PTS"]
+row = lambda eid: {"eventId": eid, "stats": ["30", "7-15", "46.7", "2-5", "40.0", "5-5", "100.0", "8", "6", "1", "0", "2", "3", "21"]}
+log = {"labels": labels, "events": dict([ev("1", "NY", "03-01"), ev("2", "NY", "04-20"), ev("3", "NY", "10-05"), ev("4", "OKC", "03-02"), ev("5", "NY", "02-14")]),
+       "seasonTypes": [
+           {"displayName": "2025-26 Postseason", "categories": [{"events": [row("2")]}]},
+           {"displayName": "2025-26 Regular Season", "categories": [{"events": [row("1"), row("4")]}]},
+           {"displayName": "2025-26 Preseason", "categories": [{"events": [row("3")]}]},
+           {"displayName": "2025-26 All-Star", "categories": [{"events": [row("5")]}]},
+       ]}
+g = server.parse_gamelog(log, "NYK")
+assert [x["date"] for x in g] == ["2026-04-20", "2026-03-01"], g
+assert g[0]["stats"] == {"FG%": "7-15", "FT%": "5-5", "3PM": "2", "PTS": "21", "REB": "8", "AST": "6", "STL": "0", "BLK": "1", "TO": "3"}
 print("ok")

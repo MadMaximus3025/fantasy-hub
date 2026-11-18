@@ -66,7 +66,15 @@
   .news p { margin:var(--sp-1) 0; color:var(--text-2); }
   .news b { color:var(--text); }
   .games { list-style:none; margin:var(--sp-1) 0; padding:0; display:flex; flex-wrap:wrap; gap:var(--sp-1); }
-  .games li { border:1px solid var(--line); border-radius:var(--r-sm); padding:var(--sp-1) var(--sp-2); font-size:var(--fs-sm); color:var(--text-2); }
+  .games li { font-size:var(--fs-sm); color:var(--text-2); }
+  .chip { background:transparent; color:var(--text-2); border:1px solid var(--line); border-radius:var(--r-sm); padding:0 var(--sp-2); font-weight:500; }
+  .chip:hover, .chip[aria-expanded="true"] { background:var(--row-hover); border-color:var(--focus); filter:none; }
+  .h2h { position:absolute; z-index:10; width:min(560px, calc(100vw - 32px)); background:var(--card); border:1px solid var(--line); border-radius:var(--r-md); box-shadow:0 8px 24px rgb(0 0 0 / .25); padding:var(--sp-3); }
+  .h2h-head { display:flex; justify-content:space-between; align-items:center; gap:var(--sp-2); margin-bottom:var(--sp-2); }
+  .h2h-scroll { overflow-x:auto; }
+  .h2h th, .h2h td { white-space:nowrap; }
+  .h2h small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
+  .muted { color:var(--muted); margin:0; }
   .games span { font-family:var(--font-num); color:var(--muted); margin-right:var(--sp-1); }
   .score { display:flex; align-items:baseline; gap:var(--sp-2); margin-bottom:var(--sp-2); flex-wrap:wrap; }
   .score .big { font:700 var(--fs-xl) var(--font-num); }
@@ -99,6 +107,10 @@
   <button id="refresh" class="ghost">Refresh</button>
 </header>
 <main id="app"></main>
+<div id="h2h" class="h2h" role="dialog" aria-labelledby="h2h-title" hidden>
+  <div class="h2h-head"><strong id="h2h-title"></strong><button class="ghost" type="button" aria-label="Close" onclick="closeH2H()"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.75"/></svg></button></div>
+  <div id="h2h-body"></div>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -121,7 +133,7 @@ function rosterCard(d) {
       </div>
       <div class="news" id="news-${i}">
         <ul class="games" aria-label="Games left this matchup">${p.upcoming.length
-          ? p.upcoming.map(g => `<li><span>${gameDay(g.date)}</span> vs ${esc(g.opp)}</li>`).join("")
+          ? p.upcoming.map(g => `<li><button class="chip" data-h2h="${p.id}" data-opp="${esc(g.opp)}" data-name="${esc(p.name)}" aria-haspopup="dialog" aria-expanded="false"><span>${gameDay(g.date)}</span> vs ${esc(g.opp)}</button></li>`).join("")
           : "<li>No games left this matchup</li>"}</ul>
         ${p.news.map(n => `<p><b>${esc(n.headline)}</b><br>${esc(n.tldr)}</p>`).join("")}
       </div>
@@ -170,6 +182,56 @@ async function load(refresh = false) {
     $("#app").innerHTML = `<p class="error">Could not load league: ${esc(e.message)}</p>`;
   }
 }
+
+const H2H_CATS = ["FG%", "FT%", "3PM", "PTS", "REB", "AST", "STL", "BLK", "TO"];
+const h2hCache = {};
+let h2hChip = null;
+const pct = ma => { const [m, a] = ma.split("-").map(Number); return a ? (m / a).toFixed(3).replace(/^0/, "") : "—"; };
+
+function h2hTable(name, d) {
+  if (!d.games.length) return `<p class="muted">No games vs ${esc(d.opp)} in the last ${d.seasons} seasons.</p>`;
+  const head = H2H_CATS.map(c => `<th scope="col">${c}</th>`).join("");
+  const rows = d.games.map(g => `<tr><th scope="row">${esc(g.date)}<small>${esc(g.at)} ${esc(d.opp)} · ${esc(g.result)}</small></th>${
+    H2H_CATS.map(c => c.endsWith("%") ? `<td>${pct(g.stats[c])}<small>${esc(g.stats[c])}</small></td>` : `<td>${esc(g.stats[c])}</td>`).join("")}</tr>`).join("");
+  return `<div class="h2h-scroll"><table><thead><tr><th scope="col">Game</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function closeH2H() {
+  $("#h2h").hidden = true;
+  if (h2hChip) { h2hChip.setAttribute("aria-expanded", "false"); h2hChip = null; }
+}
+
+async function openH2H(chip) {
+  closeH2H();
+  h2hChip = chip;
+  chip.setAttribute("aria-expanded", "true");
+  const pop = $("#h2h"), { h2h: id, opp, name } = chip.dataset, key = id + "/" + opp;
+  $("#h2h-title").textContent = `${name}: last 3 games vs ${opp}`;
+  $("#h2h-body").innerHTML = `<p class="muted">Loading…</p>`;
+  pop.hidden = false;
+  const r = chip.getBoundingClientRect();
+  pop.style.top = `${r.bottom + scrollY + 6}px`;
+  pop.style.left = `${Math.max(16, Math.min(r.left + scrollX, scrollX + innerWidth - pop.offsetWidth - 16))}px`;
+  try {
+    if (!h2hCache[key]) {
+      const res = await fetch(`/api/vs/${id}/${encodeURIComponent(opp)}`);
+      if (!res.ok) throw new Error();
+      h2hCache[key] = await res.json();
+    }
+    if (h2hChip === chip) $("#h2h-body").innerHTML = h2hTable(name, h2hCache[key]);
+  } catch {
+    if (h2hChip === chip) $("#h2h-body").innerHTML = `<p class="muted">Couldn't load stats. Try again.</p>`;
+  }
+}
+
+document.addEventListener("click", e => {
+  const chip = e.target.closest("[data-h2h]");
+  if (chip) return chip === h2hChip ? closeH2H() : openH2H(chip);
+  if (!e.target.closest("#h2h")) closeH2H();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && h2hChip) { const c = h2hChip; closeH2H(); c.focus(); }
+});
 
 $("#app").addEventListener("click", e => {
   const b = e.target.closest("[data-news]");

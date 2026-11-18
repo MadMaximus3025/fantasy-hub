@@ -1,11 +1,14 @@
 import html
+import json
 import os
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.request import urlopen
 
 from espn_api.basketball import League
+from espn_api.basketball.constant import PRO_TEAM_MAP
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
@@ -15,6 +18,16 @@ CACHE_SECONDS = 300
 
 app = FastAPI()
 _cache = {"at": 0, "data": None}
+_gamelogs = {}
+
+GAMELOG_URL = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{}/gamelog?season={}"
+# ESPN's public site API uses different team codes from the fantasy API
+SITE_TO_FANTASY = {"GS": "GSW", "NO": "NOP", "NY": "NYK", "PHI": "PHL", "PHX": "PHO", "SA": "SAS", "UTAH": "UTA", "WSH": "WAS"}
+H2H_SEASONS = 4
+
+
+def current_season():
+    return int(os.environ.get("YEAR", date.today().year + 1))
 
 
 def load_env(path=Path(__file__).with_name(".env")):
@@ -167,7 +180,7 @@ def dashboard(refresh: bool = False):
         raise HTTPException(500, "LEAGUE_ID not set. Copy .env.example to .env and fill it in.")
     league = League(
         league_id=int(os.environ["LEAGUE_ID"]),
-        year=int(os.environ.get("YEAR", date.today().year + 1)),
+        year=current_season(),
         espn_s2=os.environ.get("ESPN_S2") or None,
         swid=os.environ.get("SWID") or None,
     )
@@ -175,6 +188,60 @@ def dashboard(refresh: bool = False):
     data = build_dashboard(league, me, date.today(), player_news(league, me.roster))
     _cache.update(at=time.time(), data=data)
     return data
+
+
+def parse_gamelog(data, opp):
+    """Regular season + playoff games vs `opp` (fantasy team code), newest first, with the 9 league cats."""
+    labels, events, games = data.get("labels", []), data.get("events", {}), []
+    for season_type in data.get("seasonTypes", []):
+        if not season_type.get("displayName", "").endswith(("Regular Season", "Postseason")):
+            continue
+        for cat in season_type.get("categories", []):
+            for row in cat.get("events", []):
+                ev = events.get(row.get("eventId"), {})
+                abbr = ev.get("opponent", {}).get("abbreviation", "")
+                if SITE_TO_FANTASY.get(abbr, abbr) != opp:
+                    continue
+                st = dict(zip(labels, row.get("stats", [])))
+                games.append({
+                    # gameDate is UTC; local (TZ env) date matches the day the game was played
+                    "date": datetime.fromisoformat(ev["gameDate"].replace("Z", "+00:00")).astimezone().date().isoformat(),
+                    "at": ev.get("atVs", "vs"),
+                    "result": f'{ev.get("gameResult", "")} {ev.get("score", "")}'.strip(),
+                    "stats": {
+                        "FG%": st.get("FG", ""), "FT%": st.get("FT", ""),
+                        "3PM": st.get("3PT", "").split("-")[0],
+                        "PTS": st.get("PTS", ""), "REB": st.get("REB", ""), "AST": st.get("AST", ""),
+                        "STL": st.get("STL", ""), "BLK": st.get("BLK", ""), "TO": st.get("TO", ""),
+                    },
+                })
+    return sorted(games, key=lambda g: g["date"], reverse=True)
+
+
+def fetch_gamelog(player_id, season):
+    key = (player_id, season)
+    hit = _gamelogs.get(key)
+    if hit and (season < current_season() or time.time() - hit[0] < 3600):
+        return hit[1]
+    with urlopen(GAMELOG_URL.format(player_id, season), timeout=10) as r:
+        data = json.load(r)
+    _gamelogs[key] = (time.time(), data)
+    return data
+
+
+@app.get("/api/vs/{player_id}/{opp}")
+def vs_team(player_id: int, opp: str):
+    if opp not in PRO_TEAM_MAP.values():
+        raise HTTPException(400, "Unknown team")
+    games = []
+    for season in range(current_season(), current_season() - H2H_SEASONS, -1):
+        try:
+            games += parse_gamelog(fetch_gamelog(player_id, season), opp)
+        except Exception:
+            continue  # rookie seasons and missing years 404; skip them
+        if len(games) >= 3:
+            break
+    return {"opp": opp, "seasons": H2H_SEASONS, "games": games[:3]}
 
 
 @app.get("/")
