@@ -73,8 +73,13 @@
   .h2h { position:absolute; z-index:10; width:min(560px, calc(100vw - 32px)); background:var(--card); border:1px solid var(--line); border-radius:var(--r-md); box-shadow:0 8px 24px rgb(0 0 0 / .25); padding:var(--sp-3); }
   .h2h-head { display:flex; justify-content:space-between; align-items:center; gap:var(--sp-2); margin-bottom:var(--sp-2); }
   .h2h-scroll { overflow-x:auto; }
+  .breakdown { margin-top:var(--sp-3); }
+  .breakdown summary { cursor:pointer; font-weight:600; min-height:var(--tap); display:flex; align-items:center; }
+  .breakdown h3 { margin:var(--sp-3) 0 var(--sp-1); font-size:var(--fs-sm); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .breakdown th, .breakdown td { white-space:nowrap; }
+  .breakdown tr.sum td, .breakdown tr.sum th { font-weight:700; border-top:2px solid var(--line); }
   .h2h th, .h2h td { white-space:nowrap; }
-  .h2h small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
+  .h2h small, .breakdown small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
   .muted { color:var(--muted); margin:0; }
   .games span { font-family:var(--font-num); color:var(--muted); margin-right:var(--sp-1); }
   .score { display:flex; align-items:baseline; gap:var(--sp-2); margin-bottom:var(--sp-2); flex-wrap:wrap; }
@@ -169,7 +174,24 @@ function projectionCard(d) {
   const losses = Object.values(p.result).filter(r => r === "L").length;
   const rows = p.cats.map(c => `<tr><td>${c}</td><td class="${p.result[c]}">${fmt(c, p.mine[c])}</td><td>${fmt(c, p.theirs[c])}</td></tr>`).join("");
   return `<section class="card"><h2>Projected 9-cat · ${wins}-${losses}-${9 - wins - losses}</h2>
-    <table><thead><tr><th>Cat</th><th>You</th><th>${esc(d.opponent)}</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    <table><thead><tr><th>Cat</th><th>You</th><th>${esc(d.opponent)}</th></tr></thead><tbody>${rows}</tbody></table>
+    <details class="breakdown"><summary>Per-player breakdown</summary>
+      <p class="muted">Season average × games left (not started yet), added to this week's totals so far.</p>
+      ${breakdownTable("You", p.players.mine, p.current.mine, p.mine)}
+      ${breakdownTable(d.opponent, p.players.theirs, p.current.theirs, p.theirs)}
+    </details></section>`;
+}
+
+// One row per counted player: their projected stats for the rest of the week.
+function breakdownTable(team, players, current, total) {
+  const one = v => (Math.round(v * 10) / 10).toString();
+  const pctCell = (m, a) => `<td>${a ? pct(`${m}-${a}`) : "—"}<small>${one(m)}-${one(a)}</small></td>`;
+  const counting = ["3PM", "PTS", "REB", "AST", "STL", "BLK", "TO"];
+  const head = `<tr><th scope="col">Player</th><th scope="col">G</th><th scope="col">FG%</th><th scope="col">FT%</th>${counting.map(c => `<th scope="col">${c}</th>`).join("")}</tr>`;
+  const rows = players.map(r => `<tr><th scope="row">${esc(r.name)}</th><td>${r.games}</td>${pctCell(r.FGM, r.FGA)}${pctCell(r.FTM, r.FTA)}${counting.map(c => `<td>${one(r[c])}</td>`).join("")}</tr>`).join("");
+  const sofar = `<tr><th scope="row">So far this week</th><td></td><td>${fmt("FG%", current["FG%"] || 0)}</td><td>${fmt("FT%", current["FT%"] || 0)}</td>${counting.map(c => `<td>${one(current[c] || 0)}</td>`).join("")}</tr>`;
+  const sum = `<tr class="sum"><th scope="row">Projected</th><td></td><td>${fmt("FG%", total["FG%"])}</td><td>${fmt("FT%", total["FT%"])}</td>${counting.map(c => `<td>${fmt(c, total[c])}</td>`).join("")}</tr>`;
+  return `<h3>${esc(team)}</h3><div class="h2h-scroll"><table><thead>${head}</thead><tbody>${rows}${sofar}${sum}</tbody></table></div>`;
 }
 
 async function load(refresh = false) {

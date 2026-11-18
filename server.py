@@ -67,16 +67,26 @@ def daily_slate(roster, monday):
     return [counts[d] for d in days]
 
 
-def project(roster, current_cats, now, sunday):
-    """Current matchup totals + season averages x games not started yet. FG%/FT% use only those games."""
-    tot = {k: 0.0 for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}
+def scores(current_cats):
+    return {k: (v or {}).get("score", 0) for k, v in (current_cats or {}).items()}
+
+
+def contributions(roster, now, sunday):
+    """Each counted player's projected stats for the rest of the week: season average x games not started yet."""
+    rows = []
     for p in filter(plays, roster):
-        # games already played are in current_cats; counting them again would double them
+        # games already played are in the current matchup totals; counting them again would double them
         g = sum(1 for x in p.schedule.values() if now < x["date"] and x["date"].date() <= sunday)
         avg = season_avg(p)
-        for k in tot:
-            tot[k] += avg.get(k, 0) * g
-    current = {k: (v or {}).get("score", 0) for k, v in (current_cats or {}).items()}
+        rows.append({"name": p.name, "games": g, **{k: avg.get(k, 0) * g for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
+    return rows
+
+
+def project(roster, current_cats, now, sunday):
+    """Current matchup totals + the sum of contributions(). FG%/FT% use only remaining games."""
+    rows = contributions(roster, now, sunday)
+    tot = {k: sum(r[k] for r in rows) for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}
+    current = scores(current_cats)
     out = {k: round(tot[k] + current.get(k, 0), 1) for k in COUNTING}
     # shortcut: ESPN only returns the current %, not makes/attempts, so % ignores games already played.
     out["FG%"] = round(tot["FGM"] / tot["FGA"], 3) if tot["FGA"] else current.get("FG%", 0)
@@ -174,6 +184,8 @@ def build_dashboard(league, me, now, news):
             "mine": mine_proj,
             "theirs": opp_proj,
             "result": compare(mine_proj, opp_proj),
+            "current": {"mine": scores(my_cats), "theirs": scores(opp_cats)},
+            "players": {"mine": contributions(me.roster, now, sunday), "theirs": contributions(opp.roster, now, sunday)},
         }
     return data
 

@@ -46,6 +46,11 @@ r = d["projection"]["result"]
 assert r["PTS"] == "W" and r["TO"] == "L" and r["FG%"] == "T", r
 assert d["roster"][0]["news"][0]["headline"] == "h"
 
+# breakdown rows add up to the projection
+rows = d["projection"]["players"]["mine"]
+assert [(r["name"], r["games"]) for r in rows] == [("Jalen Johnson", 3), ("Devin Booker", 2)]  # OUT player excluded
+assert sum(r["PTS"] for r in rows) + d["projection"]["current"]["mine"]["PTS"] == d["projection"]["mine"]["PTS"]
+
 # IR slot never counts, even when only day-to-day
 assert not server.plays(player(8, "IR guy", [3], injury="DAY_TO_DAY", slot="IR"))
 assert server.plays(player(8, "DTD guy", [3], injury="DAY_TO_DAY"))
