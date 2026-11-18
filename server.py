@@ -4,7 +4,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -261,6 +261,7 @@ def dashboard(refresh: bool = False):
         raise HTTPException(502, f"ESPN refused the request ({e}). Check LEAGUE_ID, ESPN_S2 and SWID; the cookies expire.")
     me = find_my_team(league, os.environ.get("TEAM_ID"), os.environ.get("SWID"))
     data = build_dashboard(league, me, datetime.now(), player_news(league, me.roster))
+    data["updated"] = datetime.now(timezone.utc).isoformat()  # when ESPN was last pulled; the browser shows it in local time
     _cache.update(at=time.time(), data=data)
     return data
 

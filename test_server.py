@@ -113,6 +113,15 @@ import time as _t
 server._cache.update(at=_t.time() - 30, data={"cached": True})
 assert server.dashboard(refresh=True) == {"cached": True}
 
+# a fresh ESPN pull is stamped with its time; cached responses keep the old stamp
+os.environ["LEAGUE_ID"] = "1"
+saved = server.League, server.find_my_team, server.player_news, server.build_dashboard
+server.League, server.find_my_team, server.player_news, server.build_dashboard = (lambda **kw: None), (lambda *a: NS(roster=[])), (lambda *a: {}), (lambda *a: {})
+server._cache.update(at=0, data=None)
+stamp = server.dashboard()["updated"]
+assert datetime.fromisoformat(stamp).tzinfo is not None and server.dashboard()["updated"] == stamp
+server.League, server.find_my_team, server.player_news, server.build_dashboard = saved
+
 # after tonight's games: Wednesday is already in the current totals, so it is not projected again
 late = server.project(me.roster, cats, datetime(2026, 11, 18, 23), MON + timedelta(days=6))
 assert late["PTS"] == 4 * 22 + 50, late["PTS"]  # Johnson Fri+Sun, Booker Thu+Sat; Wed not counted again

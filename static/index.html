@@ -41,6 +41,7 @@
   header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4); border-bottom:1px solid var(--line); margin-bottom:var(--sp-2); }
   header h1 { margin:0; font-size:var(--fs-lg); font-weight:700; }
   header small { color:var(--muted); display:block; font-weight:400; font-size:var(--fs-sm); }
+  .refresh { display:flex; flex-direction:column; align-items:flex-end; gap:var(--sp-1); }
   main { display:grid; grid-template-columns: 1.6fr 1fr; gap:var(--sp-2); padding:0 var(--sp-4) var(--sp-4); }
   @media (max-width: 900px) { main { grid-template-columns:1fr; } }
   .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-md); padding:var(--sp-3); min-width:0; box-shadow:var(--shadow); }
@@ -115,7 +116,10 @@
 <body>
 <header>
   <h1 id="team">Loading…<small id="league"></small></h1>
-  <button id="refresh" class="ghost">Refresh</button>
+  <div class="refresh">
+    <button id="refresh" class="ghost">Refresh</button>
+    <small id="updated" aria-live="polite"></small>
+  </div>
 </header>
 <main id="app"></main>
 <div id="h2h" class="h2h" role="dialog" aria-labelledby="h2h-title" hidden>
@@ -212,6 +216,7 @@ async function load(refresh = false) {
     const d = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));  // non-JSON error pages
     if (!r.ok) throw new Error(d.detail || r.statusText);
     $("#team").innerHTML = `${esc(d.team)}<small>${esc(d.league)}</small>`;
+    $("#updated").textContent = d.updated ? "Updated " + new Date(d.updated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
     $("#app").innerHTML = rosterCard(d) + `<div class="stack">${slateCard(d)}${projectionCard(d)}</div>`;
   } catch (e) {
     $("#app").innerHTML = `<p class="error">Could not load league: ${esc(e.message)}</p>`;
