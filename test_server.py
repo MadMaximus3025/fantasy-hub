@@ -5,11 +5,12 @@ from types import SimpleNamespace as NS
 import server
 
 TODAY = date(2026, 11, 18)  # Wednesday
+NOW = datetime(2026, 11, 18, 12)  # noon, before tonight's 7pm games
 MON = TODAY - timedelta(days=2)
 
 
 def player(pid, name, game_days, injury="ACTIVE", **avg):
-    sched = {str(i): {"team": "BOS", "date": datetime.combine(MON + timedelta(days=d), datetime.min.time())}
+    sched = {str(i): {"team": "BOS", "date": datetime.combine(MON + timedelta(days=d), datetime.min.time()).replace(hour=19)}
              for i, d in enumerate(game_days)}
     avg = {"FGM": 8, "FGA": 16, "FTM": 4, "FTA": 5, "PTS": 22, "REB": 6, "AST": 5,
            "STL": 1, "BLK": 1, "3PM": 2, "TO": 3, **avg}
@@ -34,7 +35,7 @@ league = NS(settings=NS(name="Family n Friends"), teams=[me, opp],
 assert server.find_my_team(league, None, "{abc}") is me
 assert server.find_my_team(league, "2", None) is opp
 
-d = server.build_dashboard(league, me, TODAY, {1: [{"headline": "h", "story": "s"}]})
+d = server.build_dashboard(league, me, NOW, {1: [{"headline": "h", "story": "s"}]})
 assert d["slate"]["mine"] == [1, 1, 1, 1, 1, 1, 1], d["slate"]  # OUT player excluded
 assert d["slate"]["theirs"] == [0, 0, 1, 1, 1, 1, 1]
 assert [p["games_left"] for p in d["roster"]] == [3, 2, 3]
@@ -46,9 +47,12 @@ r = d["projection"]["result"]
 assert r["PTS"] == "W" and r["TO"] == "L" and r["FG%"] == "T", r
 assert d["roster"][0]["news"][0]["headline"] == "h"
 
+# after tonight's games: Wednesday is already in the current totals, so it is not projected again
+late = server.project(me.roster, cats, datetime(2026, 11, 18, 23), MON + timedelta(days=6))
+assert late["PTS"] == 4 * 22 + 50, late["PTS"]  # Johnson Fri+Sun, Booker Thu+Sat; Wed not counted again
 # bye week: no matchup
 league.scoreboard = lambda: []
-assert server.build_dashboard(league, me, TODAY, {})["opponent"] is None
+assert server.build_dashboard(league, me, NOW, {})["opponent"] is None
 # upcoming games: only today..Sunday of the current matchup week
 assert len(server.upcoming_games(player(9, "x", [1, 3, 9]), TODAY, MON + timedelta(days=6))) == 1
 assert [g["date"] for g in d["roster"][0]["upcoming"]] == ["2026-11-18", "2026-11-20", "2026-11-22"]
@@ -72,7 +76,24 @@ log = {"labels": labels, "events": dict([ev("1", "NY", "03-01"), ev("2", "NY", "
            {"displayName": "2025-26 Preseason", "categories": [{"events": [row("3")]}]},
            {"displayName": "2025-26 All-Star", "categories": [{"events": [row("5")]}]},
        ]}
-g = server.parse_gamelog(log, "NYK")
+g = [x for x in server.parse_gamelog(log) if x["opp"] == "NYK"]
 assert [x["date"] for x in g] == ["2026-04-20", "2026-03-01"], g
 assert g[0]["stats"] == {"FG%": "7-15", "FT%": "5-5", "3PM": "2", "PTS": "21", "REB": "8", "AST": "6", "STL": "0", "BLK": "1", "TO": "3"}
+
+# vs endpoint: only roster players, cached parsed games, newest 3, bad team rejected
+from fastapi import HTTPException
+server._cache["data"] = {"roster": [{"id": 7}]}
+fake = {2027: [{"opp": "NYK", "date": "2026-11-01"}], 2026: Exception, 2025: [{"opp": "NYK", "date": f"2025-0{m}-01"} for m in (3, 2, 1)] + [{"opp": "OKC", "date": "2025-04-01"}]}
+def fake_fetch(pid, season):
+    if fake.get(season) is Exception or season not in fake:
+        raise OSError("404")
+    return fake[season]
+real_fetch, server.fetch_gamelog = server.fetch_gamelog, fake_fetch
+assert [g["date"] for g in server.vs_team(7, "NYK")["games"]] == ["2026-11-01", "2025-03-01", "2025-02-01"]
+for args, code in (((7, "XXX"), 400), ((999, "NYK"), 404)):
+    try:
+        server.vs_team(*args); assert False
+    except HTTPException as e:
+        assert e.status_code == code
+server.fetch_gamelog = real_fetch
 print("ok")

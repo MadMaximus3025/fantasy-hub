@@ -65,11 +65,12 @@ def daily_slate(roster, monday):
     return [counts[d] for d in days]
 
 
-def project(roster, current_cats, today, sunday):
-    """Current matchup totals + season averages x games left. FG%/FT% use only remaining games."""
+def project(roster, current_cats, now, sunday):
+    """Current matchup totals + season averages x games not started yet. FG%/FT% use only those games."""
     tot = {k: 0.0 for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}
     for p in filter(plays, roster):
-        g = len(game_dates(p, today, sunday))
+        # games already played are in current_cats; counting them again would double them
+        g = sum(1 for x in p.schedule.values() if now < x["date"] and x["date"].date() <= sunday)
         avg = season_avg(p)
         for k in tot:
             tot[k] += avg.get(k, 0) * g
@@ -123,7 +124,8 @@ def player_news(league, roster):
         return {}  # news is nice-to-have; never break the dashboard over it
 
 
-def build_dashboard(league, me, today, news):
+def build_dashboard(league, me, now, news):
+    today = now.date()
     monday, sunday = week_bounds(today)
     matchup = next(
         (m for m in league.scoreboard() if me in (m.home_team, m.away_team)), None
@@ -159,8 +161,8 @@ def build_dashboard(league, me, today, news):
     }
     data["slate"] = {"mine": daily_slate(me.roster, monday)}
     if opp:
-        mine_proj = project(me.roster, my_cats, today, sunday)
-        opp_proj = project(opp.roster, opp_cats, today, sunday)
+        mine_proj = project(me.roster, my_cats, now, sunday)
+        opp_proj = project(opp.roster, opp_cats, now, sunday)
         data["opponent"] = opp.team_name
         data["slate"]["theirs"] = daily_slate(opp.roster, monday)
         data["projection"] = {
@@ -185,13 +187,13 @@ def dashboard(refresh: bool = False):
         swid=os.environ.get("SWID") or None,
     )
     me = find_my_team(league, os.environ.get("TEAM_ID"), os.environ.get("SWID"))
-    data = build_dashboard(league, me, date.today(), player_news(league, me.roster))
+    data = build_dashboard(league, me, datetime.now(), player_news(league, me.roster))
     _cache.update(at=time.time(), data=data)
     return data
 
 
-def parse_gamelog(data, opp):
-    """Regular season + playoff games vs `opp` (fantasy team code), newest first, with the 9 league cats."""
+def parse_gamelog(data):
+    """Regular season + playoff games, newest first, with opponent (fantasy team code) and the 9 league cats."""
     labels, events, games = data.get("labels", []), data.get("events", {}), []
     for season_type in data.get("seasonTypes", []):
         if not season_type.get("displayName", "").endswith(("Regular Season", "Postseason")):
@@ -200,12 +202,11 @@ def parse_gamelog(data, opp):
             for row in cat.get("events", []):
                 ev = events.get(row.get("eventId"), {})
                 abbr = ev.get("opponent", {}).get("abbreviation", "")
-                if SITE_TO_FANTASY.get(abbr, abbr) != opp:
-                    continue
                 st = dict(zip(labels, row.get("stats", [])))
                 games.append({
                     # gameDate is UTC; local (TZ env) date matches the day the game was played
                     "date": datetime.fromisoformat(ev["gameDate"].replace("Z", "+00:00")).astimezone().date().isoformat(),
+                    "opp": SITE_TO_FANTASY.get(abbr, abbr),
                     "at": ev.get("atVs", "vs"),
                     "result": f'{ev.get("gameResult", "")} {ev.get("score", "")}'.strip(),
                     "stats": {
@@ -224,19 +225,22 @@ def fetch_gamelog(player_id, season):
     if hit and (season < current_season() or time.time() - hit[0] < 3600):
         return hit[1]
     with urlopen(GAMELOG_URL.format(player_id, season), timeout=10) as r:
-        data = json.load(r)
-    _gamelogs[key] = (time.time(), data)
-    return data
+        games = parse_gamelog(json.load(r))  # raw response is ~3 MB in memory; keep only the parsed games
+    _gamelogs[key] = (time.time(), games)
+    return games
 
 
 @app.get("/api/vs/{player_id}/{opp}")
 def vs_team(player_id: int, opp: str):
     if opp not in PRO_TEAM_MAP.values():
         raise HTTPException(400, "Unknown team")
+    # only your roster, so outsiders can't make the server fetch (and cache) every NBA player
+    if player_id not in {p["id"] for p in (_cache["data"] or {}).get("roster", [])}:
+        raise HTTPException(404, "Player not on your roster")
     games = []
     for season in range(current_season(), current_season() - H2H_SEASONS, -1):
         try:
-            games += parse_gamelog(fetch_gamelog(player_id, season), opp)
+            games += [g for g in fetch_gamelog(player_id, season) if g["opp"] == opp]
         except Exception:
             continue  # rookie seasons and missing years 404; skip them
         if len(games) >= 3:
