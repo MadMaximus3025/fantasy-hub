@@ -16,8 +16,7 @@ def player(pid, name, game_days, injury="ACTIVE", slot="BE", **avg):
            "STL": 1, "BLK": 1, "3PM": 2, "TO": 3, **avg}
     return NS(playerId=pid, name=name, year=2027, schedule=sched, injuryStatus=injury, lineupSlot=slot,
               eligibleSlots=["PG", "SG", "G", "UT"], proTeam="ATL",
-              stats={"2027_total": {"avg": avg}},
-              nine_cat_averages={k: v for k, v in avg.items() if k in server.CATS})
+              stats={"2027_total": {"avg": avg}})
 
 
 me = NS(team_id=1, team_name="Neutered", owners=[{"id": "{ABC}"}], roster=[

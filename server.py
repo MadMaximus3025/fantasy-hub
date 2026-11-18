@@ -148,7 +148,6 @@ def build_dashboard(league, me, now, news):
             "team": p.proTeam,
             "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
             "games_left": len(game_dates(p, today, sunday)),
-            "avg": p.nine_cat_averages,
             "upcoming": upcoming_games(p, today, sunday),
             "news": news.get(p.playerId, []),
         }
