@@ -48,8 +48,32 @@ assert d["roster"][0]["news"][0]["headline"] == "h"
 
 # only your set starters count: bench and IR players' games are ignored
 f = player
-assert server.daily_slate([f(1, "a", [0]), f(2, "b", [0], slot="BE"), f(3, "c", [0], slot="IR")], MON) == [1, 0, 0, 0, 0, 0, 0]
+assert server.daily_slate([f(1, "a", [3]), f(2, "b", [3], slot="BE"), f(3, "c", [3], slot="IR")], 1, MON, TODAY) == [0, 0, 0, 1, 0, 0, 0]
 assert server.project([f(1, "a", [3]), f(2, "b", [3], slot="BE")], None, NOW, MON + timedelta(days=6))["PTS"] == 22
+
+# per-day ESPN lineups: Tuesday (past) counts starters who actually played; later days use that day's lineup
+TUE, THU = MON + timedelta(days=1), MON + timedelta(days=3)
+a, b, c = f(1, "a", [1, 3], slot="BE"), f(2, "b", [1, 3]), f(3, "c", [1, 3], injury="OUT")
+lu = {TUE: {1: {1: True, 2: True, 3: False}}, THU: {1: {1: True, 3: True}}}  # Tue: a & b played, c (OUT) didn't; Thu: a & c start
+assert server.daily_slate([a, b, c], 1, MON, TODAY, lu) == [0, 2, 0, 1, 0, 0, 0]  # Thu: c is OUT, b benched
+rows = server.contributions([a, b, c], NOW, MON + timedelta(days=6), 1, lu)
+assert [(r["name"], r["games"]) for r in rows] == [("a", 1)], rows  # only a starts Thursday and is available
+
+# played(): stats recorded in that period count; projections or empty stat lines don't
+e = lambda *s: {"playerPoolEntry": {"player": {"stats": list(s)}}}
+assert server.played(e({"scoringPeriodId": 30, "statSourceId": 0, "stats": {"0": 12.0}}), 30)
+assert not server.played(e({"scoringPeriodId": 30, "statSourceId": 1, "stats": {"0": 12.0}}), 30)
+assert not server.played(e({"scoringPeriodId": 30, "statSourceId": 0, "stats": {"0": 0}}), 30)
+assert not server.played(e({"scoringPeriodId": 29, "statSourceId": 0, "stats": {"0": 12.0}}), 30)
+
+# day_lineups(): bench/IR dropped, period offset from today, teams without lineup data left out
+def fake_get(params, headers):
+    p = params["scoringPeriodId"]
+    entry = lambda pid, slot: {"playerId": pid, "lineupSlotId": slot, "playerPoolEntry": {"player": {"stats": [{"scoringPeriodId": p, "statSourceId": 0, "stats": {"0": 5}}]}}}
+    return {"schedule": [{"home": {"teamId": 1, "rosterForCurrentScoringPeriod": {"entries": [entry(p, 0), entry(99, 12), entry(98, 13)]}}, "away": {"teamId": 2}}]}
+lg = NS(scoringPeriodId=30, currentMatchupPeriod=5, espn_request=NS(league_get=fake_get))
+got = server.day_lineups(lg, MON, TODAY, {1, 2})
+assert got[TODAY] == {1: {30: True}} and got[MON] == {1: {28: True}}, got  # today = period 30, Monday = 28
 pro = {1: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]},
        2: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]}}
 assert server.nba_games(NS(pro_schedule=pro), MON) == [1, 0, 0, 0, 0, 0, 0]  # same game listed under both teams counts once
@@ -60,9 +84,9 @@ assert [(r["name"], r["games"]) for r in rows] == [("Jalen Johnson", 3), ("Devin
 assert sum(r["PTS"] for r in rows) + d["projection"]["current"]["mine"]["PTS"] == d["projection"]["mine"]["PTS"]
 
 # IR slot never counts, even when only day-to-day
-assert not server.plays(player(8, "IR guy", [3], injury="DAY_TO_DAY", slot="IR"))
-assert server.plays(player(8, "DTD guy", [3], injury="DAY_TO_DAY"))
-assert not server.plays(player(8, "Bench guy", [3], slot="BE"))
+assert not server.starting(player(8, "IR guy", [3], injury="DAY_TO_DAY", slot="IR"), 1, THU, None)
+assert server.starting(player(8, "DTD guy", [3], injury="DAY_TO_DAY"), 1, THU, None)
+assert not server.starting(player(8, "Bench guy", [3], slot="BE"), 1, THU, None)
 
 # ESPN login failure -> clear 502 message instead of a raw 500
 import os

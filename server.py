@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from espn_api.basketball import League
-from espn_api.basketball.constant import PRO_TEAM_MAP
+from espn_api.basketball.constant import POSITION_MAP, PRO_TEAM_MAP
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
@@ -49,24 +49,56 @@ def game_dates(player, start, end):
     return [g["date"].date() for g in player.schedule.values() if start <= g["date"].date() <= end]
 
 
-def plays(player):
-    """Counts toward games and projections: in a starting slot of your set ESPN lineup and not OUT."""
-    # shortcut: ESPN only gives today's lineup, so it is reused for every day of the week
-    return player.injuryStatus != "OUT" and player.lineupSlot not in ("BE", "IR")
+def played(entry, period):
+    """The player recorded stats in that scoring period (one period = one day)."""
+    stats = entry.get("playerPoolEntry", {}).get("player", {}).get("stats", [])
+    return any(s.get("scoringPeriodId") == period and s.get("statSourceId", 0) == 0 and any(s.get("stats", {}).values()) for s in stats)
+
+
+def day_lineups(league, monday, today, team_ids):
+    """Each day's starting lineup per team, from ESPN's per-day rosters: {date: {team_id: {player_id: played}}}."""
+    def one(i):
+        d = monday + timedelta(days=i)
+        try:
+            period = league.scoringPeriodId + (d - today).days
+            data = league.espn_request.league_get(
+                params={"view": ["mMatchupScore", "mScoreboard"], "scoringPeriodId": period},
+                headers={"x-fantasy-filter": json.dumps({"schedule": {"filterMatchupPeriodIds": {"value": [league.currentMatchupPeriod]}}})},
+            )
+        except Exception:
+            return d, {}  # a missing day falls back to today's lineup
+        teams = {}
+        for m in data.get("schedule", []):
+            for t in (m.get("home", {}), m.get("away", {})):
+                if t.get("teamId") in team_ids and "rosterForCurrentScoringPeriod" in t:
+                    teams[t["teamId"]] = {e["playerId"]: played(e, period) for e in t["rosterForCurrentScoringPeriod"].get("entries", [])
+                                          if POSITION_MAP.get(e.get("lineupSlotId")) not in ("BE", "IR")}
+        return d, teams
+
+    with ThreadPoolExecutor(7) as pool:
+        return dict(pool.map(one, range(7)))
+
+
+def starting(p, team_id, d, lineups):
+    """In the team's starting lineup (not bench or IR) on day d; uses today's lineup if ESPN's lineup for d is missing."""
+    day = (lineups or {}).get(d, {}).get(team_id)
+    return p.lineupSlot not in ("BE", "IR") if day is None else p.playerId in day
 
 
 def season_avg(player):
     return player.stats.get(f"{player.year}_total", {}).get("avg") or {}
 
 
-def daily_slate(roster, monday):
-    """Games each day by players in your starting lineup."""
-    days = [monday + timedelta(days=i) for i in range(7)]
-    playing = {d: [] for d in days}
-    for p in filter(plays, roster):
-        for d in game_dates(p, days[0], days[-1]):
-            playing[d].append(p)
-    return [len(playing[d]) for d in days]
+def daily_slate(roster, team_id, monday, today, lineups=None):
+    """Starters each day: past days count starters who actually played; today on, starters with a game who aren't OUT."""
+    counts = []
+    for d in (monday + timedelta(days=i) for i in range(7)):
+        day = (lineups or {}).get(d, {}).get(team_id)
+        if d < today and day is not None:
+            counts.append(sum(day.values()))
+        else:
+            counts.append(sum(1 for p in roster if p.injuryStatus != "OUT" and starting(p, team_id, d, lineups) and game_dates(p, d, d)))
+    return counts
 
 
 def nba_games(league, monday):
@@ -85,20 +117,25 @@ def scores(current_cats):
     return {k: (v or {}).get("score", 0) for k, v in (current_cats or {}).items()}
 
 
-def contributions(roster, now, sunday):
-    """Each counted player's projected stats for the rest of the week: season average x games not started yet."""
+def contributions(roster, now, sunday, team_id=None, lineups=None):
+    """Each starter's projected stats for the rest of the week: season average x starts not played yet. OUT players skip."""
     rows = []
-    for p in filter(plays, roster):
+    for p in roster:
+        if p.injuryStatus == "OUT":
+            continue
         # games already played are in the current matchup totals; counting them again would double them
-        g = sum(1 for x in p.schedule.values() if now < x["date"] and x["date"].date() <= sunday)
+        g = sum(1 for x in p.schedule.values()
+                if now < x["date"] and x["date"].date() <= sunday and starting(p, team_id, x["date"].date(), lineups))
+        if not g:
+            continue
         avg = season_avg(p)
         rows.append({"name": p.name, "games": g, **{k: avg.get(k, 0) * g for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
     return rows
 
 
-def project(roster, current_cats, now, sunday):
+def project(roster, current_cats, now, sunday, team_id=None, lineups=None):
     """Current matchup totals + the sum of contributions(). FG%/FT% use only remaining games."""
-    rows = contributions(roster, now, sunday)
+    rows = contributions(roster, now, sunday, team_id, lineups)
     tot = {k: sum(r[k] for r in rows) for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}
     current = scores(current_cats)
     out = {k: round(tot[k] + current.get(k, 0), 1) for k in COUNTING}
@@ -187,19 +224,21 @@ def build_dashboard(league, me, now, news):
         "week": {"start": monday.isoformat(), "today": today.isoformat()},
         "opponent": None,
     }
-    data["slate"] = {"mine": daily_slate(me.roster, monday), "nba": nba_games(league, monday)}
+    lineups = day_lineups(league, monday, today, {me.team_id} | ({opp.team_id} if opp else set()))
+    data["slate"] = {"mine": daily_slate(me.roster, me.team_id, monday, today, lineups), "nba": nba_games(league, monday)}
     if opp:
-        mine_proj = project(me.roster, my_cats, now, sunday)
-        opp_proj = project(opp.roster, opp_cats, now, sunday)
+        mine_proj = project(me.roster, my_cats, now, sunday, me.team_id, lineups)
+        opp_proj = project(opp.roster, opp_cats, now, sunday, opp.team_id, lineups)
         data["opponent"] = opp.team_name
-        data["slate"]["theirs"] = daily_slate(opp.roster, monday)
+        data["slate"]["theirs"] = daily_slate(opp.roster, opp.team_id, monday, today, lineups)
         data["projection"] = {
             "cats": CATS,
             "mine": mine_proj,
             "theirs": opp_proj,
             "result": compare(mine_proj, opp_proj),
             "current": {"mine": scores(my_cats), "theirs": scores(opp_cats)},
-            "players": {"mine": contributions(me.roster, now, sunday), "theirs": contributions(opp.roster, now, sunday)},
+            "players": {"mine": contributions(me.roster, now, sunday, me.team_id, lineups),
+                        "theirs": contributions(opp.roster, now, sunday, opp.team_id, lineups)},
         }
     return data
 
