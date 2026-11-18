@@ -53,6 +53,7 @@
   button[aria-expanded="true"] svg { transform:rotate(180deg); }
   .player { border-bottom:1px solid var(--line); padding:var(--sp-1); min-height:var(--row-h); transition:background-color var(--dur); }
   .player:hover { background:var(--row-hover); }
+  .player > .row { cursor:pointer; }
   .player:last-child { border-bottom:0; }
   .row { display:flex; align-items:center; gap:var(--sp-2); }
   .row img { width:28px; height:28px; border-radius:50%; background:var(--surface-2); object-fit:cover; flex:none; }
@@ -233,11 +234,17 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && h2hChip) { const c = h2hChip; closeH2H(); c.focus(); }
 });
 
+// Clicking anywhere on a player's row toggles their panel; only one panel stays open.
 $("#app").addEventListener("click", e => {
-  const b = e.target.closest("[data-news]");
-  if (!b) return;
-  const open = $("#news-" + b.dataset.news).classList.toggle("open");
+  const row = e.target.closest(".player > .row");
+  if (!row) return;
+  const b = row.querySelector("[data-news]"), open = b.getAttribute("aria-expanded") !== "true";
+  document.querySelectorAll("[data-news]").forEach(x => {
+    x.setAttribute("aria-expanded", "false");
+    $("#news-" + x.dataset.news).classList.remove("open");
+  });
   b.setAttribute("aria-expanded", open);
+  $("#news-" + b.dataset.news).classList.toggle("open", open);
 });
 $("#refresh").onclick = () => load(true);
 load();
