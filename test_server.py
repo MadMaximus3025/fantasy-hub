@@ -48,15 +48,15 @@ assert d["roster"][0]["news"][0]["headline"] == "h"
 
 # only your set starters count: bench and IR players' games are ignored
 f = player
-assert server.daily_slate([f(1, "a", [3]), f(2, "b", [3], slot="BE"), f(3, "c", [3], slot="IR")], 1, MON, TODAY) == [0, 0, 0, 1, 0, 0, 0]
-assert server.project([f(1, "a", [3]), f(2, "b", [3], slot="BE")], None, NOW, MON + timedelta(days=6))["PTS"] == 22
+assert server.daily_slate([f(1, "a", [3]), f(2, "b", [3], slot="BE"), f(3, "c", [3], slot="IR")], 1, MON, MON + timedelta(days=6), TODAY) == [0, 0, 0, 1, 0, 0, 0]
+assert server.project([f(1, "a", [3]), f(2, "b", [3], slot="BE")], None, NOW, MON, MON + timedelta(days=6))["PTS"] == 22
 
 # per-day ESPN lineups: Tuesday (past) counts starters who actually played; later days use that day's lineup
 TUE, THU = MON + timedelta(days=1), MON + timedelta(days=3)
 a, b, c = f(1, "a", [1, 3], slot="BE"), f(2, "b", [1, 3]), f(3, "c", [1, 3], injury="OUT")
 lu = {TUE: {1: {1: True, 2: True, 3: False}}, THU: {1: {1: True, 3: True}}}  # Tue: a & b played, c (OUT) didn't; Thu: a & c start
-assert server.daily_slate([a, b, c], 1, MON, TODAY, lu) == [0, 2, 0, 1, 0, 0, 0]  # Thu: c is OUT, b benched
-rows = server.contributions([a, b, c], NOW, MON + timedelta(days=6), 1, lu)
+assert server.daily_slate([a, b, c], 1, MON, MON + timedelta(days=6), TODAY, lu) == [0, 2, 0, 1, 0, 0, 0]  # Thu: c is OUT, b benched
+rows = server.contributions([a, b, c], NOW, MON, MON + timedelta(days=6), 1, lu)
 assert [(r["name"], r["games"]) for r in rows] == [("a", 1)], rows  # only a starts Thursday and is available
 
 # played(): stats recorded in that period count; projections or empty stat lines don't
@@ -72,11 +72,11 @@ def fake_get(params, headers):
     entry = lambda pid, slot: {"playerId": pid, "lineupSlotId": slot, "playerPoolEntry": {"player": {"stats": [{"scoringPeriodId": p, "statSourceId": 0, "stats": {"0": 5}}]}}}
     return {"schedule": [{"home": {"teamId": 1, "rosterForCurrentScoringPeriod": {"entries": [entry(p, 0), entry(99, 12), entry(98, 13)]}}, "away": {"teamId": 2}}]}
 lg = NS(scoringPeriodId=30, currentMatchupPeriod=5, espn_request=NS(league_get=fake_get))
-got = server.day_lineups(lg, MON, TODAY, {1, 2}, 5)
+got = server.day_lineups(lg, MON, MON + timedelta(days=6), TODAY, {1, 2}, 5)
 assert got[TODAY] == {1: {30: True}} and got[MON] == {1: {28: True}}, got  # today = period 30, Monday = 28
 pro = {1: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]},
        2: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]}}
-assert server.nba_games(NS(pro_schedule=pro), MON) == [1, 0, 0, 0, 0, 0, 0]  # same game listed under both teams counts once
+assert server.nba_games(NS(pro_schedule=pro), MON, MON + timedelta(days=6)) == [1, 0, 0, 0, 0, 0, 0]  # same game listed under both teams counts once
 
 # breakdown rows add up to the projection
 rows = d["projection"]["players"]["mine"]
@@ -123,7 +123,7 @@ assert datetime.fromisoformat(stamp).tzinfo is not None and server.dashboard()["
 server.League, server.find_my_team, server.player_news, server.build_dashboard = saved
 
 # after tonight's games: Wednesday is already in the current totals, so it is not projected again
-late = server.project(me.roster, cats, datetime(2026, 11, 18, 23), MON + timedelta(days=6))
+late = server.project(me.roster, cats, datetime(2026, 11, 18, 23), MON, MON + timedelta(days=6))
 assert late["PTS"] == 4 * 22 + 50, late["PTS"]  # Johnson Fri+Sun, Booker Thu+Sat; Wed not counted again
 # week picker: another week moves the dates, uses that week's matchup, and projects only games inside it
 nxt = server.build_dashboard(league, me, NOW, {}, week=6)
@@ -133,7 +133,19 @@ past = server.build_dashboard(league, me, NOW, {}, week=4)
 assert past["week"]["start"] == "2026-11-09" and all(p["games_left"] == 0 and p["upcoming"] == [] for p in past["roster"])
 # a future week projects every game in that week, none from this week
 nx = f(30, "nx", [3, 8, 9])  # Thu this week, Tue+Wed next week
-assert [r["games"] for r in server.contributions([nx], NOW, MON + timedelta(days=13))] == [2]
+assert [r["games"] for r in server.contributions([nx], NOW, MON + timedelta(days=7), MON + timedelta(days=13))] == [2]
+
+# real ESPN week dates: matchup period -> scoring periods (days); today (Wed Nov 18) is scoring period 30
+espn_weeks = {"1": list(range(1, 14)), "5": list(range(28, 35)), "6": list(range(35, 49))}  # week 6 is a 14-day (All-Star) week
+real = NS(settings=NS(name="L", matchup_periods=espn_weeks), scoringPeriodId=30, currentMatchupPeriod=5,
+          teams=[me, opp], scoreboard=lambda week: [])
+assert server.week_dates(real, 5, TODAY) == (date(2026, 11, 16), date(2026, 11, 22))
+assert server.week_dates(real, 1, TODAY) == (date(2026, 10, 20), date(2026, 11, 1))  # opening week: Tue to Sunday after next
+assert server.week_dates(real, 6, TODAY) == (date(2026, 11, 23), date(2026, 12, 6))
+assert server.week_dates(real, 7, TODAY) == (date(2026, 11, 30), date(2026, 12, 6))  # not in ESPN's map: Mon-Sun fallback
+long = server.build_dashboard(real, me, NOW, {}, week=6)
+assert (long["week"]["start"], long["week"]["end"], len(long["slate"]["mine"])) == ("2026-11-23", "2026-12-06", 14)
+assert long["week"]["count"] == 6  # highest week in ESPN's map
 
 # bye week: no matchup
 league.scoreboard = lambda week: []

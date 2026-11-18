@@ -40,6 +40,19 @@ def load_env(path=Path(__file__).with_name(".env")):
                 os.environ.setdefault(k.strip(), v.strip())
 
 
+def days_between(start, end):
+    return [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+def week_dates(league, week, today):
+    """First and last day of matchup `week` from ESPN's matchup period -> scoring periods map (1 scoring period = 1 day)."""
+    periods = (getattr(league.settings, "matchup_periods", None) or {}).get(str(week)) or []
+    if len(periods) > 1 and all(isinstance(p, int) for p in periods):
+        # scoring period ids are consecutive days; league.scoringPeriodId is today
+        return tuple(today + timedelta(days=p - league.scoringPeriodId) for p in (min(periods), max(periods)))
+    return week_bounds(today, week - league.currentMatchupPeriod)  # ESPN gave no day list: count Mon-Sun weeks
+
+
 def week_bounds(today, offset=0):
     """Monday-Sunday of the week `offset` weeks from today's."""
     # shortcut: assumes Mon-Sun matchup weeks; ESPN stretches some weeks (All-Star, opening week), shifting later weeks.
@@ -57,10 +70,9 @@ def played(entry, period):
     return any(s.get("scoringPeriodId") == period and s.get("statSourceId", 0) == 0 and any(s.get("stats", {}).values()) for s in stats)
 
 
-def day_lineups(league, monday, today, team_ids, week):
+def day_lineups(league, start, end, today, team_ids, week):
     """Each day's starting lineup per team, from ESPN's per-day rosters: {date: {team_id: {player_id: played}}}."""
-    def one(i):
-        d = monday + timedelta(days=i)
+    def one(d):
         try:
             period = league.scoringPeriodId + (d - today).days
             data = league.espn_request.league_get(
@@ -78,7 +90,7 @@ def day_lineups(league, monday, today, team_ids, week):
         return d, teams
 
     with ThreadPoolExecutor(7) as pool:
-        return dict(pool.map(one, range(7)))
+        return dict(pool.map(one, days_between(start, end)))
 
 
 def starting(p, team_id, d, lineups):
@@ -91,10 +103,10 @@ def season_avg(player):
     return player.stats.get(f"{player.year}_total", {}).get("avg") or {}
 
 
-def daily_slate(roster, team_id, monday, today, lineups=None):
+def daily_slate(roster, team_id, start, end, today, lineups=None):
     """Starters each day: past days count starters who actually played; today on, starters with a game who aren't OUT."""
     counts = []
-    for d in (monday + timedelta(days=i) for i in range(7)):
+    for d in days_between(start, end):
         day = (lineups or {}).get(d, {}).get(team_id)
         if d < today and day is not None:
             counts.append(sum(day.values()))
@@ -103,9 +115,9 @@ def daily_slate(roster, team_id, monday, today, lineups=None):
     return counts
 
 
-def nba_games(league, monday):
+def nba_games(league, start, end):
     """Number of NBA games each day of the week."""
-    days = {monday + timedelta(days=i): set() for i in range(7)}
+    days = {d: set() for d in days_between(start, end)}
     for periods in getattr(league, "pro_schedule", {}).values():
         for games in periods.values():
             for g in games:
@@ -119,16 +131,15 @@ def scores(current_cats):
     return {k: (v or {}).get("score", 0) for k, v in (current_cats or {}).items()}
 
 
-def contributions(roster, now, sunday, team_id=None, lineups=None):
+def contributions(roster, now, start, end, team_id=None, lineups=None):
     """Each starter's projected stats for the rest of the week: season average x starts not played yet. OUT players skip."""
-    monday = sunday - timedelta(days=6)
     rows = []
     for p in roster:
         if p.injuryStatus == "OUT":
             continue
         # games already played are in the current matchup totals; counting them again would double them
         g = sum(1 for x in p.schedule.values()
-                if now < x["date"] and monday <= x["date"].date() <= sunday and starting(p, team_id, x["date"].date(), lineups))
+                if now < x["date"] and start <= x["date"].date() <= end and starting(p, team_id, x["date"].date(), lineups))
         if not g:
             continue
         avg = season_avg(p)
@@ -136,9 +147,9 @@ def contributions(roster, now, sunday, team_id=None, lineups=None):
     return rows
 
 
-def project(roster, current_cats, now, sunday, team_id=None, lineups=None):
+def project(roster, current_cats, now, start, end, team_id=None, lineups=None):
     """Current matchup totals + the sum of contributions(). FG%/FT% use only remaining games."""
-    rows = contributions(roster, now, sunday, team_id, lineups)
+    rows = contributions(roster, now, start, end, team_id, lineups)
     tot = {k: sum(r[k] for r in rows) for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}
     current = scores(current_cats)
     out = {k: round(tot[k] + current.get(k, 0), 1) for k in COUNTING}
@@ -197,8 +208,8 @@ def build_dashboard(league, me, now, news, week=None):
     today = now.date()
     current = league.currentMatchupPeriod
     week = week or current
-    monday, sunday = week_bounds(today, week - current)
-    start = max(today, monday)  # games still to come in the selected week (none for a past week)
+    first, last = week_dates(league, week, today)
+    left_from = max(today, first)  # games still to come in the selected week (none for a past week)
     matchup = next(
         (m for m in league.scoreboard(week) if me in (m.home_team, m.away_team)), None
     )
@@ -218,8 +229,8 @@ def build_dashboard(league, me, now, news, week=None):
             "pos": "/".join(s for s in p.eligibleSlots if s in ("PG", "SG", "SF", "PF", "C")),
             "team": p.proTeam,
             "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
-            "games_left": len(game_dates(p, start, sunday)),
-            "upcoming": upcoming_games(p, start, sunday),
+            "games_left": len(game_dates(p, left_from, last)),
+            "upcoming": upcoming_games(p, left_from, last),
             "news": news.get(p.playerId, []),
         }
 
@@ -227,25 +238,25 @@ def build_dashboard(league, me, now, news, week=None):
         "league": league.settings.name,
         "team": me.team_name,
         "roster": [player_row(p) for p in me.roster],
-        "week": {"start": monday.isoformat(), "today": today.isoformat(), "number": week, "current": current,
-                 "count": len(getattr(league.settings, "matchup_periods", None) or {}) or max(week, current)},
+        "week": {"start": first.isoformat(), "end": last.isoformat(), "today": today.isoformat(), "number": week, "current": current,
+                 "count": max([week, current, *map(int, getattr(league.settings, "matchup_periods", None) or {})])},
         "opponent": None,
     }
-    lineups = day_lineups(league, monday, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
-    data["slate"] = {"mine": daily_slate(me.roster, me.team_id, monday, today, lineups), "nba": nba_games(league, monday)}
+    lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
+    data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
     if opp:
-        mine_proj = project(me.roster, my_cats, now, sunday, me.team_id, lineups)
-        opp_proj = project(opp.roster, opp_cats, now, sunday, opp.team_id, lineups)
+        mine_proj = project(me.roster, my_cats, now, first, last, me.team_id, lineups)
+        opp_proj = project(opp.roster, opp_cats, now, first, last, opp.team_id, lineups)
         data["opponent"] = opp.team_name
-        data["slate"]["theirs"] = daily_slate(opp.roster, opp.team_id, monday, today, lineups)
+        data["slate"]["theirs"] = daily_slate(opp.roster, opp.team_id, first, last, today, lineups)
         data["projection"] = {
             "cats": CATS,
             "mine": mine_proj,
             "theirs": opp_proj,
             "result": compare(mine_proj, opp_proj),
             "current": {"mine": scores(my_cats), "theirs": scores(opp_cats)},
-            "players": {"mine": contributions(me.roster, now, sunday, me.team_id, lineups),
-                        "theirs": contributions(opp.roster, now, sunday, opp.team_id, lineups)},
+            "players": {"mine": contributions(me.roster, now, first, last, me.team_id, lineups),
+                        "theirs": contributions(opp.roster, now, first, last, opp.team_id, lineups)},
         }
     return data
 

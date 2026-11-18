@@ -191,7 +191,7 @@ function slateCard(d) {
       ${d.opponent ? `<span class="vs">vs</span><span class="big">${total(theirs)}</span>
       <span class="diff ${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : ""}${diff} games</span>` : ""}
     </div>
-    <p class="meta">${md(date(0))}–${md(date(6))} · ${d.opponent ? `vs ${esc(d.opponent)}` : "bye week"} · starting games</p>
+    <p class="meta">${md(date(0))}–${md(new Date(d.week.end + "T00:00"))} · ${d.opponent ? `vs ${esc(d.opponent)}` : "bye week"} · starting games</p>
     <div class="days">${days}</div>
     <p class="legend"><span>Top: you</span>${d.opponent ? "<span>Bottom: opponent</span>" : ""}</p></section>`;
 }
