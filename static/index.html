@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy Hub</title>
+<style>
+  :root { --bg:#0b0b0b; --card:#141414; --line:#2a2a2a; --text:#f2f2f2; --muted:#8a8a8a; --accent:#ffd400; --win:#3ddc84; --loss:#ff4d4d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; }
+  header h1 { margin:0; font-size:20px; letter-spacing:.5px; }
+  header small { color:var(--muted); display:block; font-weight:400; font-size:12px; }
+  main { display:grid; grid-template-columns: 1.6fr 1fr; gap:16px; padding:0 24px 24px; }
+  @media (max-width: 900px) { main { grid-template-columns:1fr; padding:0 16px 16px; } header { padding:16px; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; min-width:0; }
+  .card h2 { margin:0 0 12px; font-size:12px; letter-spacing:2px; color:var(--muted); text-transform:uppercase; }
+  button { background:var(--accent); color:#000; border:0; border-radius:999px; padding:6px 14px; font-weight:700; cursor:pointer; font-size:12px; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .player { border-bottom:1px solid var(--line); padding:10px 4px; }
+  .player:last-child { border-bottom:0; }
+  .row { display:flex; align-items:center; gap:12px; }
+  .row img { width:36px; height:36px; border-radius:50%; background:#222; object-fit:cover; flex:none; }
+  .name { font-weight:700; }
+  .meta { color:var(--muted); font-size:11px; letter-spacing:1px; text-transform:uppercase; }
+  .tag { margin-left:auto; display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+  .inj { color:var(--loss); font-weight:700; font-size:11px; }
+  .gl { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .news { margin:8px 0 0 48px; display:none; }
+  .news.open { display:block; }
+  .news p { margin:6px 0; color:#ccc; font-size:13px; }
+  .news b { color:var(--text); }
+  .score { display:flex; align-items:baseline; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
+  .score .big { font-size:32px; font-weight:800; }
+  .score .vs { color:var(--muted); }
+  .diff.pos { color:var(--win); } .diff.neg { color:var(--loss); }
+  .days { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+  .day { border:1px solid var(--line); border-radius:10px; text-align:center; padding:8px 0; }
+  .day.today { border-color:var(--accent); }
+  .day.past { opacity:.4; }
+  .day .d { font-size:11px; color:var(--muted); font-weight:700; }
+  .day .n { font-size:22px; font-weight:800; margin:4px 0; }
+  .day .o { font-size:10px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { padding:6px 4px; text-align:right; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-size:11px; font-weight:600; }
+  td.W { color:var(--win); font-weight:700; } td.L { color:var(--loss); font-weight:700; } td.T { color:var(--muted); }
+  .stack { display:grid; gap:16px; align-content:start; min-width:0; }
+  .error { color:var(--loss); padding:24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="team">Loading…<small id="league"></small></h1>
+  <button id="refresh" class="ghost">Refresh</button>
+</header>
+<main id="app"></main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = (c, v) => c.endsWith("%") ? Number(v).toFixed(3).replace(/^0/, "") : Math.round(v);
+const headshot = id => `https://a.espncdn.com/i/headshots/nba/players/full/${id}.png`;
+
+function rosterCard(d) {
+  const rows = d.roster.map((p, i) => `
+    <div class="player">
+      <div class="row">
+        <img src="${headshot(p.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+        <div><div class="name">${esc(p.name)}</div><div class="meta">${esc(p.pos)} · ${esc(p.team)}</div></div>
+        <div class="tag">
+          ${p.injury ? `<span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}
+          <span class="gl">${p.games_left} G left</span>
+          ${p.news.length ? `<button data-news="${i}" aria-expanded="false">${p.news.length} news ▾</button>` : ""}
+        </div>
+      </div>
+      <div class="news" id="news-${i}">
+        ${p.news.map(n => `<p><b>${esc(n.headline)}</b><br>${esc(n.story)}</p>`).join("")}
+      </div>
+    </div>`).join("");
+  return `<section class="card"><h2>Roster · ${d.roster.length} players</h2>${rows}</section>`;
+}
+
+function slateCard(d) {
+  const mine = d.slate.mine, theirs = d.slate.theirs || [];
+  const start = new Date(d.week.start + "T00:00"), today = new Date(d.week.today + "T00:00");
+  const idx = Math.round((today - start) / 864e5);
+  const left = a => a.slice(idx).reduce((x, y) => x + y, 0);
+  const diff = left(mine) - left(theirs);
+  const days = mine.map((n, i) => `
+    <div class="day ${i === idx ? "today" : ""} ${i < idx ? "past" : ""}">
+      <div class="d">${"MTWTFSS"[i]}</div><div class="n">${n}</div>
+      ${d.opponent ? `<div class="o">vs ${theirs[i]}</div>` : ""}
+    </div>`).join("");
+  return `<section class="card"><h2>The weekly slate</h2>
+    <div class="score"><span class="big">${left(mine)}</span>
+      ${d.opponent ? `<span class="vs">vs</span><span class="big">${left(theirs)}</span>
+      <span class="meta">games left · vs ${esc(d.opponent)}</span>
+      <span class="diff ${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : ""}${diff} games</span>` : `<span class="meta">games left · bye week</span>`}
+    </div>
+    <div class="days">${days}</div></section>`;
+}
+
+function projectionCard(d) {
+  if (!d.projection) return "";
+  const p = d.projection;
+  const wins = Object.values(p.result).filter(r => r === "W").length;
+  const losses = Object.values(p.result).filter(r => r === "L").length;
+  const rows = p.cats.map(c => `<tr><td>${c}</td><td class="${p.result[c]}">${fmt(c, p.mine[c])}</td><td>${fmt(c, p.theirs[c])}</td></tr>`).join("");
+  return `<section class="card"><h2>Projected 9-cat · ${wins}-${losses}-${9 - wins - losses}</h2>
+    <table><thead><tr><th>Cat</th><th>You</th><th>${esc(d.opponent)}</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+}
+
+async function load(refresh = false) {
+  try {
+    const r = await fetch("/api/dashboard" + (refresh ? "?refresh=true" : ""));
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    $("#team").innerHTML = `${esc(d.team)}<small>${esc(d.league)}</small>`;
+    $("#app").innerHTML = rosterCard(d) + `<div class="stack">${slateCard(d)}${projectionCard(d)}</div>`;
+  } catch (e) {
+    $("#app").innerHTML = `<p class="error">Could not load league: ${esc(e.message)}</p>`;
+  }
+}
+
+$("#app").addEventListener("click", e => {
+  const b = e.target.closest("[data-news]");
+  if (!b) return;
+  const open = $("#news-" + b.dataset.news).classList.toggle("open");
+  b.setAttribute("aria-expanded", open);
+});
+$("#refresh").onclick = () => load(true);
+load();
+</script>
+</body>
+</html>

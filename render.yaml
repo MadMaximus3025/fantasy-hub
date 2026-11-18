@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: fantasy-hub
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: YEAR
+        value: "2027"
+      # sync: false = Render asks for the value on first deploy; it is never stored in the repo
+      - key: LEAGUE_ID
+        sync: false
+      - key: ESPN_S2
+        sync: false
+      - key: SWID
+        sync: false
+      - key: TEAM_ID
+        sync: false

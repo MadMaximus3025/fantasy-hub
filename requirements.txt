@@ -1,0 +1,3 @@
+espn_api==1.0.1
+fastapi
+uvicorn
