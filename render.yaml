@@ -8,6 +8,9 @@ services:
     envVars:
       - key: YEAR
         value: "2027"
+      # game times are converted to server local time; UTC would push evening games to the next day
+      - key: TZ
+        value: America/New_York
       # sync: false = Render asks for the value on first deploy; it is never stored in the repo
       - key: LEAGUE_ID
         sync: false

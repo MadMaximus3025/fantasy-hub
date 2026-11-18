@@ -65,6 +65,9 @@
   .news.open { display:block; }
   .news p { margin:var(--sp-1) 0; color:var(--text-2); }
   .news b { color:var(--text); }
+  .games { list-style:none; margin:var(--sp-1) 0; padding:0; display:flex; flex-wrap:wrap; gap:var(--sp-1); }
+  .games li { border:1px solid var(--line); border-radius:var(--r-sm); padding:var(--sp-1) var(--sp-2); font-size:var(--fs-sm); color:var(--text-2); }
+  .games span { font-family:var(--font-num); color:var(--muted); margin-right:var(--sp-1); }
   .score { display:flex; align-items:baseline; gap:var(--sp-2); margin-bottom:var(--sp-2); flex-wrap:wrap; }
   .score .big { font:700 var(--fs-xl) var(--font-num); }
   .score .vs { color:var(--muted); }
@@ -102,6 +105,8 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const fmt = (c, v) => c.endsWith("%") ? Number(v).toFixed(3).replace(/^0/, "") : Math.round(v);
 const headshot = id => `https://a.espncdn.com/i/headshots/nba/players/full/${id}.png`;
 
+const gameDay = iso => new Date(iso + "T00:00").toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" });
+
 function rosterCard(d) {
   const rows = d.roster.map((p, i) => `
     <div class="player">
@@ -111,11 +116,14 @@ function rosterCard(d) {
         <div class="tag">
           ${p.injury ? `<span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}
           <span class="gl">${p.games_left} G left</span>
-          ${p.news.length ? `<button data-news="${i}" aria-expanded="false">${p.news.length} news <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>` : ""}
+          <button data-news="${i}" aria-expanded="false" aria-controls="news-${i}">Games${p.news.length ? ` · ${p.news.length} news` : ""} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>
         </div>
       </div>
       <div class="news" id="news-${i}">
-        ${p.news.map(n => `<p><b>${esc(n.headline)}</b><br>${esc(n.story)}</p>`).join("")}
+        <ul class="games" aria-label="Games left this matchup">${p.upcoming.length
+          ? p.upcoming.map(g => `<li><span>${gameDay(g.date)}</span> vs ${esc(g.opp)}</li>`).join("")
+          : "<li>No games left this matchup</li>"}</ul>
+        ${p.news.map(n => `<p><b>${esc(n.headline)}</b><br>${esc(n.tldr)}</p>`).join("")}
       </div>
     </div>`).join("");
   return `<section class="card"><h2>Roster · ${d.roster.length} players</h2>${rows}</section>`;

@@ -49,4 +49,15 @@ assert d["roster"][0]["news"][0]["headline"] == "h"
 # bye week: no matchup
 league.scoreboard = lambda: []
 assert server.build_dashboard(league, me, TODAY, {})["opponent"] is None
+# upcoming games: only today..Sunday of the current matchup week
+assert len(server.upcoming_games(player(9, "x", [1, 3, 9]), TODAY, MON + timedelta(days=6))) == 1
+assert [g["date"] for g in d["roster"][0]["upcoming"]] == ["2026-11-18", "2026-11-20", "2026-11-22"]
+assert d["roster"][0]["upcoming"][0]["opp"] == "BOS"
+
+# news TLDR: tags and entities stripped, first sentence only, long text capped
+raw = "<p>Johnson&nbsp;scored <b>30</b> points vs. Miami.</p> He also had 12 boards. Coach said more."
+assert server.tldr(raw) == "Johnson scored 30 points vs. Miami.", server.tldr(raw)
+assert server.tldr(None) == ""
+long = server.tldr("word " * 100)
+assert len(long) <= 181 and long.endswith("…")
 print("ok")

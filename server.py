@@ -1,4 +1,6 @@
+import html
 import os
+import re
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -85,11 +87,25 @@ def find_my_team(league, team_id, swid):
     raise HTTPException(400, "Could not find your team. Set TEAM_ID in .env.")
 
 
+def tldr(text, limit=180):
+    """Strip HTML from ESPN news and keep the first sentence."""
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html.unescape(text or ""))).strip()
+    # shortcut: sentence split skips vs./Jr./Sr./St. only; other abbreviations cut early. Use an LLM summary if that bites.
+    first = re.split(r"(?<!\bvs\.)(?<!\bJr\.)(?<!\bSr\.)(?<!\bSt\.)(?<=[.!?])\s+(?=[A-Z])", text, maxsplit=1)[0]
+    return first if len(first) <= limit else first[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def upcoming_games(player, today, end):
+    games = sorted((g for g in player.schedule.values() if today <= g["date"].date() <= end), key=lambda g: g["date"])
+    return [{"date": g["date"].date().isoformat(), "opp": g["team"]} for g in games]
+
+
 def player_news(league, roster):
     try:
         infos = league.player_info(playerId=[p.playerId for p in roster], include_news=True) or []
         infos = infos if isinstance(infos, list) else [infos]
-        return {i.playerId: (i.news or [])[:3] for i in infos}
+        return {i.playerId: [{"headline": tldr(n["headline"]), "tldr": tldr(n["story"])}
+                             for n in (i.news or [])[:3]] for i in infos}
     except Exception:
         return {}  # news is nice-to-have; never break the dashboard over it
 
@@ -117,6 +133,7 @@ def build_dashboard(league, me, today, news):
             "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
             "games_left": len(game_dates(p, today, sunday)),
             "avg": p.nine_cat_averages,
+            "upcoming": upcoming_games(p, today, sunday),
             "news": news.get(p.playerId, []),
         }
 
