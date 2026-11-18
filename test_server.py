@@ -62,6 +62,19 @@ except HTTPException as e:
     assert e.status_code == 502 and "ESPN_S2" in e.detail, e.detail
 server.League = real_league
 
+# news: one player's failure doesn't drop the others; HTML cleaned
+def fake_news(pid):
+    if pid == 2:
+        raise OSError("timeout")
+    return {"news": {"feed": [{"headline": "<b>Hot</b>", "story": "Scored 30. Then more."}] * 5}}
+nl = NS(espn_request=NS(get_player_news=fake_news))
+assert server.player_news(nl, me.roster) == {1: [{"headline": "Hot", "tldr": "Scored 30."}] * 3, 2: [], 3: [{"headline": "Hot", "tldr": "Scored 30."}] * 3}
+
+# refresh: served from cache when under 60s old, refetched after
+import time as _t
+server._cache.update(at=_t.time() - 30, data={"cached": True})
+assert server.dashboard(refresh=True) == {"cached": True}
+
 # after tonight's games: Wednesday is already in the current totals, so it is not projected again
 late = server.project(me.roster, cats, datetime(2026, 11, 18, 23), MON + timedelta(days=6))
 assert late["PTS"] == 4 * 22 + 50, late["PTS"]  # Johnson Fri+Sun, Booker Thu+Sat; Wed not counted again

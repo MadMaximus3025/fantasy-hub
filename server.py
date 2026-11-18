@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.request import urlopen
@@ -116,13 +117,16 @@ def upcoming_games(player, today, end):
 
 
 def player_news(league, roster):
-    try:
-        infos = league.player_info(playerId=[p.playerId for p in roster], include_news=True) or []
-        infos = infos if isinstance(infos, list) else [infos]
-        return {i.playerId: [{"headline": tldr(n["headline"]), "tldr": tldr(n["story"])}
-                             for n in (i.news or [])[:3]] for i in infos}
-    except Exception:
-        return {}  # news is nice-to-have; never break the dashboard over it
+    def one(p):
+        try:
+            feed = league.espn_request.get_player_news(p.playerId).get("news", {}).get("feed", [])
+            return p.playerId, [{"headline": tldr(n.get("headline")), "tldr": tldr(n.get("story"))} for n in feed[:3]]
+        except Exception:
+            return p.playerId, []  # news is nice-to-have; never break the dashboard over it
+
+    # one request per player; run them side by side instead of one after another
+    with ThreadPoolExecutor(8) as pool:
+        return dict(pool.map(one, roster))
 
 
 def build_dashboard(league, me, now, news):
@@ -176,7 +180,8 @@ def build_dashboard(league, me, now, news):
 
 @app.get("/api/dashboard")
 def dashboard(refresh: bool = False):
-    if not refresh and _cache["data"] and time.time() - _cache["at"] < CACHE_SECONDS:
+    # Refresh may skip the cache only after 60s, so repeat clicks can't flood ESPN with your cookie
+    if _cache["data"] and time.time() - _cache["at"] < (60 if refresh else CACHE_SECONDS):
         return _cache["data"]
     if not os.environ.get("LEAGUE_ID"):
         raise HTTPException(500, "LEAGUE_ID not set. Copy .env.example to .env and fill it in.")
