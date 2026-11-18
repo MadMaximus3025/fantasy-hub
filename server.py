@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from espn_api.basketball import League
-from espn_api.basketball.constant import PRO_TEAM_MAP
+from espn_api.basketball.constant import POSITION_MAP, PRO_TEAM_MAP
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
@@ -58,13 +58,51 @@ def season_avg(player):
     return player.stats.get(f"{player.year}_total", {}).get("avg") or {}
 
 
-def daily_slate(roster, monday):
+def lineup_slots(league):
+    """Starting lineup slots (e.g. PG, SG, G, UT, UT) from the league settings; None if ESPN doesn't say."""
+    try:
+        counts = league.espn_request.league_get(params={"view": "mSettings"})["settings"]["rosterSettings"]["lineupSlotCounts"]
+    except Exception:
+        return None  # fall back to counting every player's games
+    return [POSITION_MAP[int(k)] for k, n in counts.items() if POSITION_MAP.get(int(k)) not in ("BE", "IR", "", None) for _ in range(n)]
+
+
+def max_starts(players, slots):
+    """Most of these players that can start at once: match players to open slots by position eligibility."""
+    owner = {}
+
+    def place(p, tried):
+        for i, slot in enumerate(slots):
+            if slot in p.eligibleSlots and i not in tried:
+                tried.add(i)
+                if i not in owner or place(owner[i], tried):
+                    owner[i] = p
+                    return True
+        return False
+
+    return sum(place(p, set()) for p in players)
+
+
+def daily_slate(roster, monday, slots=None):
+    """Games each day that can actually be started (all games when slots are unknown)."""
     days = [monday + timedelta(days=i) for i in range(7)]
-    counts = {d: 0 for d in days}
+    playing = {d: [] for d in days}
     for p in filter(plays, roster):
         for d in game_dates(p, days[0], days[-1]):
-            counts[d] += 1
-    return [counts[d] for d in days]
+            playing[d].append(p)
+    return [max_starts(playing[d], slots) if slots else len(playing[d]) for d in days]
+
+
+def nba_games(league, monday):
+    """Number of NBA games each day of the week."""
+    days = {monday + timedelta(days=i): set() for i in range(7)}
+    for periods in getattr(league, "pro_schedule", {}).values():
+        for games in periods.values():
+            for g in games:
+                d = datetime.fromtimestamp(g["date"] / 1000).date()
+                if d in days:
+                    days[d].add((g["homeProTeamId"], g["awayProTeamId"]))
+    return [len(v) for v in days.values()]
 
 
 def scores(current_cats):
@@ -173,12 +211,13 @@ def build_dashboard(league, me, now, news):
         "week": {"start": monday.isoformat(), "today": today.isoformat()},
         "opponent": None,
     }
-    data["slate"] = {"mine": daily_slate(me.roster, monday)}
+    slots = lineup_slots(league)
+    data["slate"] = {"mine": daily_slate(me.roster, monday, slots), "nba": nba_games(league, monday)}
     if opp:
         mine_proj = project(me.roster, my_cats, now, sunday)
         opp_proj = project(opp.roster, opp_cats, now, sunday)
         data["opponent"] = opp.team_name
-        data["slate"]["theirs"] = daily_slate(opp.roster, monday)
+        data["slate"]["theirs"] = daily_slate(opp.roster, monday, slots)
         data["projection"] = {
             "cats": CATS,
             "mine": mine_proj,

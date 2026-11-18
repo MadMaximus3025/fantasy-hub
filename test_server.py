@@ -46,6 +46,22 @@ r = d["projection"]["result"]
 assert r["PTS"] == "W" and r["TO"] == "L" and r["FG%"] == "T", r
 assert d["roster"][0]["news"][0]["headline"] == "h"
 
+# starters: on a busy day only as many games count as there are eligible lineup slots
+f = player
+assert server.max_starts([f(1, "a", [0]), f(2, "b", [0]), f(3, "c", [0])], ["PG", "UT"]) == 2
+big = NS(eligibleSlots=["C", "UT"])
+assert server.max_starts([big, big], ["PG", "C"]) == 1  # two centers can't fill a PG slot
+# a guard who could take UT must move to PG so the center gets UT
+g = NS(eligibleSlots=["PG", "UT"])
+assert server.max_starts([g, big], ["UT", "PG"]) == 2
+assert server.daily_slate([f(1, "a", [0]), f(2, "b", [0])], MON, ["PG"]) == [1, 0, 0, 0, 0, 0, 0]
+assert server.daily_slate([f(1, "a", [0]), f(2, "b", [0])], MON) == [2, 0, 0, 0, 0, 0, 0]  # slots unknown: count all
+pro = {1: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]},
+       2: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]}}
+assert server.nba_games(NS(pro_schedule=pro), MON) == [1, 0, 0, 0, 0, 0, 0]  # same game listed under both teams counts once
+fake_settings = {"settings": {"rosterSettings": {"lineupSlotCounts": {"0": 1, "11": 2, "12": 3, "13": 1, "14": 0}}}}
+assert server.lineup_slots(NS(espn_request=NS(league_get=lambda params: fake_settings))) == ["PG", "UT", "UT"]
+
 # breakdown rows add up to the projection
 rows = d["projection"]["players"]["mine"]
 assert [(r["name"], r["games"]) for r in rows] == [("Jalen Johnson", 3), ("Devin Booker", 2)]  # OUT player excluded

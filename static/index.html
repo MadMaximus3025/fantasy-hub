@@ -82,7 +82,8 @@
   .h2h small, .breakdown small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
   .muted { color:var(--muted); margin:0; }
   .games span { font-family:var(--font-num); color:var(--muted); margin-right:var(--sp-1); }
-  .score { display:flex; align-items:baseline; gap:var(--sp-2); margin-bottom:var(--sp-2); flex-wrap:wrap; }
+  .score { display:flex; align-items:baseline; gap:var(--sp-2); flex-wrap:wrap; }
+  .score .diff { margin-left:auto; }
   .score .big { font:700 var(--fs-xl) var(--font-num); }
   .score .vs { color:var(--muted); }
   .diff { font:600 var(--fs-md) var(--font-num); }
@@ -94,7 +95,11 @@
   .day.past .n { color:var(--muted); }
   .day .d { font-size:var(--fs-sm); color:var(--muted); font-weight:600; }
   .day .n { font:700 var(--fs-lg) var(--font-num); }
-  .day .o { font-size:var(--fs-xs); color:var(--muted); }
+  .day .o { font:700 var(--fs-lg) var(--font-num); color:var(--muted); border-top:1px solid var(--line); margin:0 var(--sp-1); }
+  .day .dn { font-size:var(--fs-sm); color:var(--muted); }
+  .day .nba, .day .st { font-size:var(--fs-xs); color:var(--muted); }
+  .day .st { min-height:1lh; }
+  .legend { display:flex; gap:var(--sp-3); margin:var(--sp-2) 0 0; font-size:var(--fs-xs); color:var(--muted); }
   table { width:100%; border-collapse:collapse; }
   th, td { height:var(--row-h); padding:0 var(--sp-2); text-align:right; border-bottom:1px solid var(--line); }
   td { font-family:var(--font-num); }
@@ -148,23 +153,30 @@ function rosterCard(d) {
 }
 
 function slateCard(d) {
-  const mine = d.slate.mine, theirs = d.slate.theirs || [];
+  const mine = d.slate.mine, theirs = d.slate.theirs || [], nba = d.slate.nba || [];
   const start = new Date(d.week.start + "T00:00"), today = new Date(d.week.today + "T00:00");
   const idx = Math.round((today - start) / 864e5);
-  const left = a => a.slice(idx).reduce((x, y) => x + y, 0);
-  const diff = left(mine) - left(theirs);
+  const total = a => a.reduce((x, y) => x + y, 0);
+  const diff = total(mine) - total(theirs);
+  const date = i => new Date(start.getTime() + i * 864e5);
+  const md = dt => dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const days = mine.map((n, i) => `
     <div class="day ${i === idx ? "today" : ""} ${i < idx ? "past" : ""}">
-      <div class="d">${"MTWTFSS"[i]}</div><div class="n">${n}</div>
-      ${d.opponent ? `<div class="o">vs ${theirs[i]}</div>` : ""}
+      <div class="d">${date(i).toLocaleDateString(undefined, { weekday: "short" })}</div>
+      <div class="dn">${date(i).getDate()}</div>
+      <div class="n" title="Your starts">${n}</div>
+      ${d.opponent ? `<div class="o" title="Opponent starts">${theirs[i]}</div>` : ""}
+      <div class="nba">${nba[i] ?? "–"} NBA</div>
+      <div class="st">${i < idx ? "Past" : i === idx ? "Today" : ""}</div>
     </div>`).join("");
   return `<section class="card"><h2>The weekly slate</h2>
-    <div class="score"><span class="big">${left(mine)}</span>
-      ${d.opponent ? `<span class="vs">vs</span><span class="big">${left(theirs)}</span>
-      <span class="meta">games left · vs ${esc(d.opponent)}</span>
-      <span class="diff ${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : ""}${diff} games</span>` : `<span class="meta">games left · bye week</span>`}
+    <div class="score"><span class="big">${total(mine)}</span>
+      ${d.opponent ? `<span class="vs">vs</span><span class="big">${total(theirs)}</span>
+      <span class="diff ${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : ""}${diff} games</span>` : ""}
     </div>
-    <div class="days">${days}</div></section>`;
+    <p class="meta">${md(date(0))}–${md(date(6))} · ${d.opponent ? `vs ${esc(d.opponent)}` : "bye week"} · starting games</p>
+    <div class="days">${days}</div>
+    <p class="legend"><span>Top: you</span>${d.opponent ? "<span>Bottom: opponent</span>" : ""}</p></section>`;
 }
 
 function projectionCard(d) {
