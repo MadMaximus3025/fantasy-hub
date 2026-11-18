@@ -147,6 +147,18 @@ long = server.build_dashboard(real, me, NOW, {}, week=6)
 assert (long["week"]["start"], long["week"]["end"], len(long["slate"]["mine"])) == ("2026-11-23", "2026-12-06", 14)
 assert long["week"]["count"] == 6  # highest week in ESPN's map
 
+# weekly planner: per-day status follows the slate rules
+sun = MON + timedelta(days=6)
+assert [server.day_state(x, 1, THU, TODAY, lu) for x in (a, b, c)] == ["start", "bench", "out"]  # Thu lineup: a & c start, c OUT
+assert [server.day_state(x, 1, TUE, TODAY, lu) for x in (a, b, c)] == ["start", "start", "dnp"]  # Tue: c started, no stats
+assert server.day_state(a, 1, MON, TODAY, lu) == "off"  # no game Monday
+rows = server.planner_rows([a], 1, MON, sun, TODAY, lu)
+assert rows[0]["days"] == ["off", "start", "off", "start", "off", "off", "off"] and rows[0]["avg"]["PTS"] == 22
+pro2 = {1: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}, {"date": datetime(2026, 11, 30, 19).timestamp() * 1000}]},
+        2: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}]}}
+assert server.team_games(NS(pro_schedule=pro2), MON, sun) == {"ATL": 1, "BOS": 1}  # Nov 30 is outside the week
+assert set(d["planner"]) == {"mine", "teams", "theirs"}
+
 # bye week: no matchup
 league.scoreboard = lambda week: []
 assert server.build_dashboard(league, me, NOW, {})["opponent"] is None

@@ -43,7 +43,26 @@
   header small { color:var(--muted); display:block; font-weight:400; font-size:var(--fs-sm); }
   .refresh { display:flex; flex-direction:column; align-items:flex-end; gap:var(--sp-1); }
   main { display:grid; grid-template-columns: 1.6fr 1fr; gap:var(--sp-2); padding:0 var(--sp-4) var(--sp-4); }
-  @media (max-width: 900px) { main { grid-template-columns:1fr; } }
+  main.planner { grid-template-columns: 1fr 1.8fr; }
+  @media (max-width: 900px) { main, main.planner { grid-template-columns:1fr; } }
+  .nav-row { display:flex; gap:var(--sp-2); }
+  a.button { display:inline-flex; align-items:center; min-height:var(--tap); padding:0 var(--sp-3); border-radius:var(--r-pill); background:var(--accent); color:var(--on-accent); font:600 var(--fs-sm) var(--font); text-decoration:none; }
+  .bar-row { display:grid; grid-template-columns: 4.5em 1fr auto; align-items:center; gap:var(--sp-2); padding:var(--sp-1) 0; font-size:var(--fs-sm); }
+  .bar-day { color:var(--muted); font-weight:600; }
+  .bars { display:grid; gap:2px; background:var(--surface-2); border-radius:var(--r-sm); padding:2px; }
+  .bar { display:block; height:6px; border-radius:3px; }
+  .bar.you { background:var(--focus); } .bar.opp { background:var(--loss); }
+  .bar-n { font-family:var(--font-num); white-space:nowrap; }
+  .tg-row { display:flex; gap:var(--sp-3); align-items:flex-start; padding:var(--sp-2) 0; border-top:1px solid var(--line); }
+  .tg-n { font:700 var(--fs-lg) var(--font-num); min-width:1.5em; }
+  .tg-teams { display:flex; flex-wrap:wrap; gap:var(--sp-1); }
+  .chip[aria-pressed="true"] { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
+  .guide th small, .guide td small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
+  .guide th, .guide td { white-space:nowrap; text-align:center; }
+  .guide tbody th, .guide thead th:nth-child(2) { text-align:left; }
+  .guide td[class^="st-"] { color:var(--muted); }
+  .guide td.st-out { color:var(--loss); }
+  .guide .wk { font-weight:700; background:var(--surface-2); }
   .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-md); padding:var(--sp-3); min-width:0; box-shadow:var(--shadow); }
   .card h2 { margin:0 0 var(--sp-2); font-size:var(--fs-sm); font-weight:600; letter-spacing:.5px; color:var(--muted); text-transform:uppercase; }
   button { display:inline-flex; align-items:center; gap:var(--sp-1); background:var(--accent); color:var(--on-accent); border:0; border-radius:var(--r-pill); padding:0 var(--sp-3); min-height:var(--tap); font:600 var(--fs-sm) var(--font); cursor:pointer; transition:background-color var(--dur), filter var(--dur); }
@@ -123,7 +142,7 @@
 <header>
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
-    <button id="refresh" class="ghost">Refresh</button>
+    <div class="nav-row"><a id="nav" class="button" href="#planner">Weekly planner</a><button id="refresh" class="ghost">Refresh</button></div>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -162,6 +181,81 @@ function rosterCard(d) {
   return `<section class="card"><h2>Roster · ${d.roster.length} players</h2>${rows}</section>`;
 }
 
+function weekPicker(d) {
+  const w = d.week, opts = Array.from({ length: w.count }, (_, i) => i + 1)
+    .map(n => `<option value="${n}" ${n === w.number ? "selected" : ""}>Week ${n}${n === w.current ? " (now)" : ""}</option>`).join("");
+  return `<div class="picker">
+      <button class="ghost" data-week="${w.number - 1}" aria-label="Previous week" ${w.number <= 1 ? "disabled" : ""}>‹</button>
+      <select id="week" aria-label="Matchup week">${opts}</select>
+      <button class="ghost" data-week="${w.number + 1}" aria-label="Next week" ${w.number >= w.count ? "disabled" : ""}>›</button>
+    </div>`;
+}
+
+const weekDays = d => {
+  const start = new Date(d.week.start + "T00:00");
+  return d.slate.mine.map((_, i) => new Date(start.getTime() + i * 864e5));
+};
+
+// ---- Weekly planner page (#planner) ----
+const planner = { roster: "mine", stat: "PTS", teams: new Set() };
+
+function matchupGamesCard(d) {
+  const mine = d.slate.mine, theirs = d.slate.theirs || mine.map(() => 0);
+  const total = a => a.reduce((x, y) => x + y, 0), diff = total(mine) - total(theirs);
+  const max = Math.max(1, ...mine, ...theirs);
+  const rows = weekDays(d).map((dt, i) => `<div class="bar-row">
+      <span class="bar-day">${dt.toLocaleDateString(undefined, { weekday: "short" })} ${dt.getDate()}</span>
+      <span class="bars"><span class="bar you" style="width:${mine[i] / max * 100}%"></span><span class="bar opp" style="width:${theirs[i] / max * 100}%"></span></span>
+      <span class="bar-n">${mine[i]} vs ${theirs[i]}</span></div>`).join("");
+  return `<section class="card"><div class="slate-head"><h2>Matchup games · You vs ${esc(d.opponent || "bye")}</h2>${weekPicker(d)}</div>
+    <div class="score"><span class="big">${total(mine)}</span><span class="vs">vs</span><span class="big">${total(theirs)}</span>
+      <span class="diff ${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : ""}${diff} games</span></div>
+    ${rows}
+    <p class="muted">Starting games per day, same as the weekly slate. Top bar: you. Bottom bar: opponent.</p></section>`;
+}
+
+function teamGamesCard(d) {
+  const groups = {};
+  for (const [team, n] of Object.entries(d.planner.teams || {})) (groups[n] ||= []).push(team);
+  const rows = Object.keys(groups).map(Number).sort((a, b) => b - a).map(n => `<div class="tg-row"><span class="tg-n">${n}</span>
+      <span class="tg-teams">${groups[n].sort().map(t => `<button class="chip" data-team="${esc(t)}" aria-pressed="${planner.teams.has(t)}">${esc(t)}</button>`).join("")}</span></div>`).join("");
+  return `<section class="card"><div class="slate-head"><h2>Games per team</h2><span class="muted">Click to filter</span></div>
+    ${rows || '<p class="muted">No NBA schedule for this week.</p>'}</section>`;
+}
+
+function rosterGuideCard(d) {
+  if (!d.planner[planner.roster]) planner.roster = "mine";  // e.g. opponent chosen, then a bye week
+  const rows = d.planner[planner.roster];
+  const shown = planner.teams.size ? rows.filter(r => planner.teams.has(r.team)) : rows;
+  const c = planner.stat, isPct = c.endsWith("%"), [m, a] = c === "FG%" ? ["FGM", "FGA"] : ["FTM", "FTA"];
+  const one = v => (Math.round(v * 10) / 10).toFixed(1);
+  const cell = (r, s) => s !== "start" ? `<td class="st-${s}">${{ bench: "BE", out: "OUT", dnp: "DNP", off: "·" }[s]}</td>`
+    : `<td>${isPct ? (r.avg[a] ? pct(`${r.avg[m]}-${r.avg[a]}`) : "—") : one(r.avg[c])}</td>`;
+  const week = r => {
+    if (r.slot === "IR") return "IR";
+    const n = r.days.filter(s => s === "start").length;
+    return isPct ? (r.avg[a] * n ? pct(`${r.avg[m] * n}-${r.avg[a] * n}`) : "—") : one(r.avg[c] * n);
+  };
+  const days = weekDays(d);
+  const head = `<tr><th scope="col">Slot</th><th scope="col">Player</th>${days.map(dt => `<th scope="col">${dt.toLocaleDateString(undefined, { weekday: "short" })}<small>${dt.getDate()}</small></th>`).join("")}<th scope="col">Week ${c}</th></tr>`;
+  const body = shown.map(r => `<tr><td>${esc(r.slot || "–")}</td><th scope="row">${esc(r.name)}${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}<small>${esc(r.team)}</small></th>
+      ${r.days.map(s => cell(r, s)).join("")}<td class="wk">${week(r)}</td></tr>`).join("");
+  const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label}</option>`;
+  return `<section class="card guide"><div class="slate-head"><h2>Roster guide</h2>
+      <div class="picker">
+        <select id="pl-roster" aria-label="Roster">${opt("mine", "Your team", planner.roster)}${d.planner.theirs ? opt("theirs", esc(d.opponent), planner.roster) : ""}</select>
+        <select id="pl-stat" aria-label="Projection stat">${CATS9.map(x => opt(x, x, c)).join("")}</select>
+      </div></div>
+    <div class="h2h-scroll"><table><thead>${head}</thead><tbody>${body || `<tr><td colspan="${days.length + 3}" class="muted">No players on the selected teams.</td></tr>`}</tbody></table></div>
+    <p class="muted">Season-average ${c} on days a player starts (past days: started and played). BE = bench, OUT = injured, DNP = started but no stats, · = no game.${planner.teams.size ? ` Filtered to ${[...planner.teams].join(", ")}.` : ""}</p></section>`;
+}
+
+const CATS9 = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%"];
+
+function plannerView(d) {
+  return `<div class="stack">${matchupGamesCard(d)}${teamGamesCard(d)}</div>${rosterGuideCard(d)}`;
+}
+
 function slateCard(d) {
   const mine = d.slate.mine, theirs = d.slate.theirs || [], nba = d.slate.nba || [];
   const start = new Date(d.week.start + "T00:00"), today = new Date(d.week.today + "T00:00");
@@ -179,14 +273,7 @@ function slateCard(d) {
       <div class="nba">${nba[i] ?? "–"} NBA</div>
       <div class="st">${i < idx ? "Past" : i === idx ? "Today" : ""}</div>
     </div>`).join("");
-  const w = d.week, opts = Array.from({ length: w.count }, (_, i) => i + 1)
-    .map(n => `<option value="${n}" ${n === w.number ? "selected" : ""}>Week ${n}${n === w.current ? " (now)" : ""}</option>`).join("");
-  return `<section class="card"><div class="slate-head"><h2>The weekly slate</h2>
-    <div class="picker">
-      <button class="ghost" data-week="${w.number - 1}" aria-label="Previous week" ${w.number <= 1 ? "disabled" : ""}>‹</button>
-      <select id="week" aria-label="Matchup week">${opts}</select>
-      <button class="ghost" data-week="${w.number + 1}" aria-label="Next week" ${w.number >= w.count ? "disabled" : ""}>›</button>
-    </div></div>
+  return `<section class="card"><div class="slate-head"><h2>The weekly slate</h2>${weekPicker(d)}</div>
     <div class="score"><span class="big">${total(mine)}</span>
       ${d.opponent ? `<span class="vs">vs</span><span class="big">${total(theirs)}</span>
       <span class="diff ${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : ""}${diff} games</span>` : ""}
@@ -224,6 +311,18 @@ function breakdownTable(team, players, current, total) {
 }
 
 let week = null;  // selected matchup week; null until the first load tells us the current one
+let lastData = null;
+
+function render(d) {
+  lastData = d;
+  const onPlanner = location.hash === "#planner";
+  $("#app").classList.toggle("planner", onPlanner);
+  $("#nav").textContent = onPlanner ? "Dashboard" : "Weekly planner";
+  $("#nav").href = onPlanner ? "#" : "#planner";
+  $("#app").innerHTML = onPlanner ? plannerView(d)
+    : rosterCard(d) + `<div class="stack">${slateCard(d)}${projectionCard(d)}</div>`;
+}
+window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
 
 async function load(refresh = false) {
   closeH2H();
@@ -238,7 +337,7 @@ async function load(refresh = false) {
     week = d.week.number;
     $("#team").innerHTML = `${esc(d.team)}<small>${esc(d.league)}</small>`;
     $("#updated").textContent = d.updated ? "Updated " + new Date(d.updated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
-    $("#app").innerHTML = rosterCard(d) + `<div class="stack">${slateCard(d)}${projectionCard(d)}</div>`;
+    render(d);
   } catch (e) {
     $("#app").innerHTML = `<p class="error">Could not load league: ${esc(e.message)}</p>`;
   }
@@ -314,6 +413,16 @@ $("#app").addEventListener("click", e => {
 });
 $("#app").addEventListener("change", e => {
   if (e.target.id === "week") { week = Number(e.target.value); load(); }
+  if (e.target.id === "pl-roster") { planner.roster = e.target.value; render(lastData); }
+  if (e.target.id === "pl-stat") { planner.stat = e.target.value; render(lastData); }
+});
+// Games-per-team chips filter the roster guide
+$("#app").addEventListener("click", e => {
+  const t = e.target.closest("[data-team]");
+  if (!t) return;
+  planner.teams.has(t.dataset.team) ? planner.teams.delete(t.dataset.team) : planner.teams.add(t.dataset.team);
+  render(lastData);
+  document.querySelector(`[data-team="${t.dataset.team}"]`)?.focus();
 });
 load();
 </script>

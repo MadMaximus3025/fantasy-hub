@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -113,6 +114,37 @@ def daily_slate(roster, team_id, start, end, today, lineups=None):
         else:
             counts.append(sum(1 for p in roster if p.injuryStatus != "OUT" and starting(p, team_id, d, lineups) and game_dates(p, d, d)))
     return counts
+
+
+def day_state(p, team_id, d, today, lineups=None):
+    """One player's status for one day, by the same rules as the slate:
+    start (counts), bench, out, dnp (started a past day but recorded no stats) or off (no game)."""
+    if not game_dates(p, d, d):
+        return "off"
+    day = (lineups or {}).get(d, {}).get(team_id)
+    if d < today and day is not None:
+        return "bench" if p.playerId not in day else "start" if day[p.playerId] else "dnp"
+    if p.injuryStatus == "OUT":
+        return "out"
+    return "start" if starting(p, team_id, d, lineups) else "bench"
+
+
+def planner_rows(roster, team_id, start, end, today, lineups):
+    """Weekly planner rows: each player's slot, injury, season averages and status for every day of the week."""
+    keep = COUNTING + ["FGM", "FGA", "FTM", "FTA"]
+    return [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
+             "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
+             "avg": {k: season_avg(p).get(k, 0) for k in keep},
+             "days": [day_state(p, team_id, d, today, lineups) for d in days_between(start, end)]} for p in roster]
+
+
+def team_games(league, start, end):
+    """Games each NBA team plays in the week, by fantasy team code."""
+    counts = Counter()
+    for team_id, periods in getattr(league, "pro_schedule", {}).items():
+        dates = {datetime.fromtimestamp(g["date"] / 1000).date() for games in periods.values() for g in games}
+        counts[PRO_TEAM_MAP.get(team_id, str(team_id))] = sum(start <= d <= end for d in dates)
+    return dict(counts)
 
 
 def nba_games(league, start, end):
@@ -244,11 +276,14 @@ def build_dashboard(league, me, now, news, week=None):
     }
     lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
+    data["planner"] = {"mine": planner_rows(me.roster, me.team_id, first, last, today, lineups),
+                       "teams": team_games(league, first, last)}
     if opp:
         mine_proj = project(me.roster, my_cats, now, first, last, me.team_id, lineups)
         opp_proj = project(opp.roster, opp_cats, now, first, last, opp.team_id, lineups)
         data["opponent"] = opp.team_name
         data["slate"]["theirs"] = daily_slate(opp.roster, opp.team_id, first, last, today, lineups)
+        data["planner"]["theirs"] = planner_rows(opp.roster, opp.team_id, first, last, today, lineups)
         data["projection"] = {
             "cats": CATS,
             "mine": mine_proj,
