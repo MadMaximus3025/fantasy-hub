@@ -9,7 +9,7 @@ NOW = datetime(2026, 11, 18, 12)  # noon, before tonight's 7pm games
 MON = TODAY - timedelta(days=2)
 
 
-def player(pid, name, game_days, injury="ACTIVE", slot="BE", **avg):
+def player(pid, name, game_days, injury="ACTIVE", slot="UT", **avg):
     sched = {str(i): {"team": "BOS", "date": datetime.combine(MON + timedelta(days=d), datetime.min.time()).replace(hour=19)}
              for i, d in enumerate(game_days)}
     avg = {"FGM": 8, "FGA": 16, "FTM": 4, "FTA": 5, "PTS": 22, "REB": 6, "AST": 5,
@@ -46,21 +46,13 @@ r = d["projection"]["result"]
 assert r["PTS"] == "W" and r["TO"] == "L" and r["FG%"] == "T", r
 assert d["roster"][0]["news"][0]["headline"] == "h"
 
-# starters: on a busy day only as many games count as there are eligible lineup slots
+# only your set starters count: bench and IR players' games are ignored
 f = player
-assert server.max_starts([f(1, "a", [0]), f(2, "b", [0]), f(3, "c", [0])], ["PG", "UT"]) == 2
-big = NS(eligibleSlots=["C", "UT"])
-assert server.max_starts([big, big], ["PG", "C"]) == 1  # two centers can't fill a PG slot
-# a guard who could take UT must move to PG so the center gets UT
-g = NS(eligibleSlots=["PG", "UT"])
-assert server.max_starts([g, big], ["UT", "PG"]) == 2
-assert server.daily_slate([f(1, "a", [0]), f(2, "b", [0])], MON, ["PG"]) == [1, 0, 0, 0, 0, 0, 0]
-assert server.daily_slate([f(1, "a", [0]), f(2, "b", [0])], MON) == [2, 0, 0, 0, 0, 0, 0]  # slots unknown: count all
+assert server.daily_slate([f(1, "a", [0]), f(2, "b", [0], slot="BE"), f(3, "c", [0], slot="IR")], MON) == [1, 0, 0, 0, 0, 0, 0]
+assert server.project([f(1, "a", [3]), f(2, "b", [3], slot="BE")], None, NOW, MON + timedelta(days=6))["PTS"] == 22
 pro = {1: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]},
        2: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]}}
 assert server.nba_games(NS(pro_schedule=pro), MON) == [1, 0, 0, 0, 0, 0, 0]  # same game listed under both teams counts once
-fake_settings = {"settings": {"rosterSettings": {"lineupSlotCounts": {"0": 1, "11": 2, "12": 3, "13": 1, "14": 0}}}}
-assert server.lineup_slots(NS(espn_request=NS(league_get=lambda params: fake_settings))) == ["PG", "UT", "UT"]
 
 # breakdown rows add up to the projection
 rows = d["projection"]["players"]["mine"]
@@ -70,6 +62,7 @@ assert sum(r["PTS"] for r in rows) + d["projection"]["current"]["mine"]["PTS"] =
 # IR slot never counts, even when only day-to-day
 assert not server.plays(player(8, "IR guy", [3], injury="DAY_TO_DAY", slot="IR"))
 assert server.plays(player(8, "DTD guy", [3], injury="DAY_TO_DAY"))
+assert not server.plays(player(8, "Bench guy", [3], slot="BE"))
 
 # ESPN login failure -> clear 502 message instead of a raw 500
 import os

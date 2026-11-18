@@ -188,7 +188,7 @@ function projectionCard(d) {
   return `<section class="card"><h2>Projected 9-cat · ${wins}-${losses}-${9 - wins - losses}</h2>
     <table><thead><tr><th>Cat</th><th>You</th><th>${esc(d.opponent)}</th></tr></thead><tbody>${rows}</tbody></table>
     <details class="breakdown"><summary>Per-player breakdown</summary>
-      <p class="muted">Season average × games left (not started yet), added to this week's totals so far.</p>
+      <p class="muted">Starters in your set ESPN lineup: season average × games not started yet, added to this week's totals so far. Bench and IR don't count.</p>
       ${breakdownTable("You", p.players.mine, p.current.mine, p.mine)}
       ${breakdownTable(d.opponent, p.players.theirs, p.current.theirs, p.theirs)}
     </details></section>`;
