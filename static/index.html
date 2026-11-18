@@ -85,6 +85,12 @@
   .games span { font-family:var(--font-num); color:var(--muted); margin-right:var(--sp-1); }
   .score { display:flex; align-items:baseline; gap:var(--sp-2); flex-wrap:wrap; }
   .score .diff { margin-left:auto; }
+  .slate-head { display:flex; justify-content:space-between; align-items:center; gap:var(--sp-2); margin-bottom:var(--sp-2); }
+  .slate-head h2 { margin:0; }
+  .picker { display:flex; align-items:center; gap:var(--sp-1); }
+  .picker button { padding:0 var(--sp-2); }
+  .picker select { min-height:var(--tap); border:1px solid var(--line); border-radius:var(--r-pill); background:var(--card); color:var(--text); font:600 var(--fs-sm) var(--font); padding:0 var(--sp-2); }
+  .picker :disabled { opacity:.5; cursor:default; }
   .score .big { font:700 var(--fs-xl) var(--font-num); }
   .score .vs { color:var(--muted); }
   .diff { font:600 var(--fs-md) var(--font-num); }
@@ -173,7 +179,14 @@ function slateCard(d) {
       <div class="nba">${nba[i] ?? "–"} NBA</div>
       <div class="st">${i < idx ? "Past" : i === idx ? "Today" : ""}</div>
     </div>`).join("");
-  return `<section class="card"><h2>The weekly slate</h2>
+  const w = d.week, opts = Array.from({ length: w.count }, (_, i) => i + 1)
+    .map(n => `<option value="${n}" ${n === w.number ? "selected" : ""}>Week ${n}${n === w.current ? " (now)" : ""}</option>`).join("");
+  return `<section class="card"><div class="slate-head"><h2>The weekly slate</h2>
+    <div class="picker">
+      <button class="ghost" data-week="${w.number - 1}" aria-label="Previous week" ${w.number <= 1 ? "disabled" : ""}>‹</button>
+      <select id="week" aria-label="Matchup week">${opts}</select>
+      <button class="ghost" data-week="${w.number + 1}" aria-label="Next week" ${w.number >= w.count ? "disabled" : ""}>›</button>
+    </div></div>
     <div class="score"><span class="big">${total(mine)}</span>
       ${d.opponent ? `<span class="vs">vs</span><span class="big">${total(theirs)}</span>
       <span class="diff ${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : ""}${diff} games</span>` : ""}
@@ -189,7 +202,7 @@ function projectionCard(d) {
   const wins = Object.values(p.result).filter(r => r === "W").length;
   const losses = Object.values(p.result).filter(r => r === "L").length;
   const rows = p.cats.map(c => `<tr><td>${c}</td><td class="${p.result[c]}">${fmt(c, p.mine[c])}</td><td>${fmt(c, p.theirs[c])}</td></tr>`).join("");
-  return `<section class="card"><h2>Projected 9-cat · ${wins}-${losses}-${9 - wins - losses}</h2>
+  return `<section class="card"><h2>${d.week.number < d.week.current ? "Final" : "Projected"} 9-cat · ${wins}-${losses}-${9 - wins - losses}</h2>
     <table><thead><tr><th>Cat</th><th>You</th><th>${esc(d.opponent)}</th></tr></thead><tbody>${rows}</tbody></table>
     <details class="breakdown"><summary>Per-player breakdown</summary>
       <p class="muted">Starters in your set ESPN lineup: season average × games not started yet, added to this week's totals so far. Bench and IR don't count.</p>
@@ -210,11 +223,19 @@ function breakdownTable(team, players, current, total) {
   return `<h3>${esc(team)}</h3><div class="h2h-scroll"><table><thead>${head}</thead><tbody>${rows}${sofar}${sum}</tbody></table></div>`;
 }
 
+let week = null;  // selected matchup week; null until the first load tells us the current one
+
 async function load(refresh = false) {
+  closeH2H();
+  document.querySelectorAll(".picker button, .picker select").forEach(x => x.disabled = true);
   try {
-    const r = await fetch("/api/dashboard" + (refresh ? "?refresh=true" : ""));
+    const q = new URLSearchParams();
+    if (week) q.set("week", week);
+    if (refresh) q.set("refresh", "true");
+    const r = await fetch("/api/dashboard?" + q);
     const d = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));  // non-JSON error pages
     if (!r.ok) throw new Error(d.detail || r.statusText);
+    week = d.week.number;
     $("#team").innerHTML = `${esc(d.team)}<small>${esc(d.league)}</small>`;
     $("#updated").textContent = d.updated ? "Updated " + new Date(d.updated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
     $("#app").innerHTML = rosterCard(d) + `<div class="stack">${slateCard(d)}${projectionCard(d)}</div>`;
@@ -286,6 +307,14 @@ $("#app").addEventListener("click", e => {
   $("#news-" + b.dataset.news).classList.toggle("open", open);
 });
 $("#refresh").onclick = () => load(true);
+// Week picker: every card reloads for the chosen matchup week
+$("#app").addEventListener("click", e => {
+  const b = e.target.closest("[data-week]");
+  if (b) { week = Number(b.dataset.week); load(); }
+});
+$("#app").addEventListener("change", e => {
+  if (e.target.id === "week") { week = Number(e.target.value); load(); }
+});
 load();
 </script>
 </body>

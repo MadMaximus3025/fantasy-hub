@@ -28,8 +28,8 @@ opp = NS(team_id=2, team_name="Dylan's Dangerous Team", owners=[], roster=[
     player(4, "Opp A", [2, 3, 4, 5, 6], PTS=10, TO=1),
 ])
 cats = {"PTS": {"score": 50}, "REB": {"score": 20}}
-league = NS(settings=NS(name="Family n Friends"), teams=[me, opp],
-            scoreboard=lambda: [NS(home_team=me, away_team=opp, home_team_cats=cats, away_team_cats=None)])
+league = NS(settings=NS(name="Family n Friends", matchup_periods={str(i): [i] for i in range(1, 21)}), teams=[me, opp], currentMatchupPeriod=5,
+            scoreboard=lambda week: [NS(home_team=me, away_team=opp, home_team_cats=cats, away_team_cats=None)] if week == 5 else [])
 
 assert server.find_my_team(league, None, "{abc}") is me
 assert server.find_my_team(league, "2", None) is opp
@@ -72,7 +72,7 @@ def fake_get(params, headers):
     entry = lambda pid, slot: {"playerId": pid, "lineupSlotId": slot, "playerPoolEntry": {"player": {"stats": [{"scoringPeriodId": p, "statSourceId": 0, "stats": {"0": 5}}]}}}
     return {"schedule": [{"home": {"teamId": 1, "rosterForCurrentScoringPeriod": {"entries": [entry(p, 0), entry(99, 12), entry(98, 13)]}}, "away": {"teamId": 2}}]}
 lg = NS(scoringPeriodId=30, currentMatchupPeriod=5, espn_request=NS(league_get=fake_get))
-got = server.day_lineups(lg, MON, TODAY, {1, 2})
+got = server.day_lineups(lg, MON, TODAY, {1, 2}, 5)
 assert got[TODAY] == {1: {30: True}} and got[MON] == {1: {28: True}}, got  # today = period 30, Monday = 28
 pro = {1: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]},
        2: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]}}
@@ -93,7 +93,7 @@ import os
 from fastapi import HTTPException
 os.environ["LEAGUE_ID"] = "1"
 real_league, server.League = server.League, lambda **kw: (_ for _ in ()).throw(Exception("espn_s2 and swid are required"))
-server._cache["data"] = None
+server._cache.clear()
 try:
     server.dashboard(refresh=True); assert False
 except HTTPException as e:
@@ -110,14 +110,14 @@ assert server.player_news(nl, me.roster) == {1: [{"headline": "Hot", "tldr": "Sc
 
 # refresh: served from cache when under 60s old, refetched after
 import time as _t
-server._cache.update(at=_t.time() - 30, data={"cached": True})
+server._cache[None] = {"at": _t.time() - 30, "data": {"cached": True}}
 assert server.dashboard(refresh=True) == {"cached": True}
 
 # a fresh ESPN pull is stamped with its time; cached responses keep the old stamp
 os.environ["LEAGUE_ID"] = "1"
 saved = server.League, server.find_my_team, server.player_news, server.build_dashboard
 server.League, server.find_my_team, server.player_news, server.build_dashboard = (lambda **kw: None), (lambda *a: NS(roster=[])), (lambda *a: {}), (lambda *a: {})
-server._cache.update(at=0, data=None)
+server._cache.clear()
 stamp = server.dashboard()["updated"]
 assert datetime.fromisoformat(stamp).tzinfo is not None and server.dashboard()["updated"] == stamp
 server.League, server.find_my_team, server.player_news, server.build_dashboard = saved
@@ -125,8 +125,18 @@ server.League, server.find_my_team, server.player_news, server.build_dashboard =
 # after tonight's games: Wednesday is already in the current totals, so it is not projected again
 late = server.project(me.roster, cats, datetime(2026, 11, 18, 23), MON + timedelta(days=6))
 assert late["PTS"] == 4 * 22 + 50, late["PTS"]  # Johnson Fri+Sun, Booker Thu+Sat; Wed not counted again
+# week picker: another week moves the dates, uses that week's matchup, and projects only games inside it
+nxt = server.build_dashboard(league, me, NOW, {}, week=6)
+assert nxt["week"]["start"] == "2026-11-23" and nxt["week"]["number"] == 6 and nxt["week"]["count"] == 20
+assert nxt["opponent"] is None  # fake scoreboard has no week-6 matchup
+past = server.build_dashboard(league, me, NOW, {}, week=4)
+assert past["week"]["start"] == "2026-11-09" and all(p["games_left"] == 0 and p["upcoming"] == [] for p in past["roster"])
+# a future week projects every game in that week, none from this week
+nx = f(30, "nx", [3, 8, 9])  # Thu this week, Tue+Wed next week
+assert [r["games"] for r in server.contributions([nx], NOW, MON + timedelta(days=13))] == [2]
+
 # bye week: no matchup
-league.scoreboard = lambda: []
+league.scoreboard = lambda week: []
 assert server.build_dashboard(league, me, NOW, {})["opponent"] is None
 # upcoming games: only today..Sunday of the current matchup week
 assert len(server.upcoming_games(player(9, "x", [1, 3, 9]), TODAY, MON + timedelta(days=6))) == 1
@@ -157,7 +167,7 @@ assert g[0]["stats"] == {"FG%": "7-15", "FT%": "5-5", "3PM": "2", "PTS": "21", "
 
 # vs endpoint: only roster players, cached parsed games, newest 3, bad team rejected
 from fastapi import HTTPException
-server._cache["data"] = {"roster": [{"id": 7}]}
+server._cache.clear(); server._cache[6] = {"at": 0, "data": {"roster": [{"id": 7}]}}
 fake = {2027: [{"opp": "NYK", "date": "2026-11-01"}], 2026: Exception, 2025: [{"opp": "NYK", "date": f"2025-0{m}-01"} for m in (3, 2, 1)] + [{"opp": "OKC", "date": "2025-04-01"}]}
 def fake_fetch(pid, season):
     if fake.get(season) is Exception or season not in fake:

@@ -6,11 +6,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Annotated
 from urllib.request import urlopen
 
 from espn_api.basketball import League
 from espn_api.basketball.constant import POSITION_MAP, PRO_TEAM_MAP
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
 COUNTING = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO"]
@@ -18,7 +19,7 @@ CATS = ["FG%", "FT%", "3PM", "PTS", "REB", "AST", "STL", "BLK", "TO"]
 CACHE_SECONDS = 300
 
 app = FastAPI()
-_cache = {"at": 0, "data": None}
+_cache = {}  # matchup week (None = current) -> {"at": time, "data": dashboard}
 _gamelogs = {}
 
 GAMELOG_URL = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{}/gamelog?season={}"
@@ -39,9 +40,10 @@ def load_env(path=Path(__file__).with_name(".env")):
                 os.environ.setdefault(k.strip(), v.strip())
 
 
-def week_bounds(today):
-    # shortcut: assumes Mon-Sun matchup weeks; ESPN stretches some weeks (All-Star, opening week).
-    monday = today - timedelta(days=today.weekday())
+def week_bounds(today, offset=0):
+    """Monday-Sunday of the week `offset` weeks from today's."""
+    # shortcut: assumes Mon-Sun matchup weeks; ESPN stretches some weeks (All-Star, opening week), shifting later weeks.
+    monday = today - timedelta(days=today.weekday()) + timedelta(weeks=offset)
     return monday, monday + timedelta(days=6)
 
 
@@ -55,7 +57,7 @@ def played(entry, period):
     return any(s.get("scoringPeriodId") == period and s.get("statSourceId", 0) == 0 and any(s.get("stats", {}).values()) for s in stats)
 
 
-def day_lineups(league, monday, today, team_ids):
+def day_lineups(league, monday, today, team_ids, week):
     """Each day's starting lineup per team, from ESPN's per-day rosters: {date: {team_id: {player_id: played}}}."""
     def one(i):
         d = monday + timedelta(days=i)
@@ -63,7 +65,7 @@ def day_lineups(league, monday, today, team_ids):
             period = league.scoringPeriodId + (d - today).days
             data = league.espn_request.league_get(
                 params={"view": ["mMatchupScore", "mScoreboard"], "scoringPeriodId": period},
-                headers={"x-fantasy-filter": json.dumps({"schedule": {"filterMatchupPeriodIds": {"value": [league.currentMatchupPeriod]}}})},
+                headers={"x-fantasy-filter": json.dumps({"schedule": {"filterMatchupPeriodIds": {"value": [week]}}})},
             )
         except Exception:
             return d, {}  # a missing day falls back to today's lineup
@@ -119,13 +121,14 @@ def scores(current_cats):
 
 def contributions(roster, now, sunday, team_id=None, lineups=None):
     """Each starter's projected stats for the rest of the week: season average x starts not played yet. OUT players skip."""
+    monday = sunday - timedelta(days=6)
     rows = []
     for p in roster:
         if p.injuryStatus == "OUT":
             continue
         # games already played are in the current matchup totals; counting them again would double them
         g = sum(1 for x in p.schedule.values()
-                if now < x["date"] and x["date"].date() <= sunday and starting(p, team_id, x["date"].date(), lineups))
+                if now < x["date"] and monday <= x["date"].date() <= sunday and starting(p, team_id, x["date"].date(), lineups))
         if not g:
             continue
         avg = season_avg(p)
@@ -190,11 +193,14 @@ def player_news(league, roster):
         return dict(pool.map(one, roster))
 
 
-def build_dashboard(league, me, now, news):
+def build_dashboard(league, me, now, news, week=None):
     today = now.date()
-    monday, sunday = week_bounds(today)
+    current = league.currentMatchupPeriod
+    week = week or current
+    monday, sunday = week_bounds(today, week - current)
+    start = max(today, monday)  # games still to come in the selected week (none for a past week)
     matchup = next(
-        (m for m in league.scoreboard() if me in (m.home_team, m.away_team)), None
+        (m for m in league.scoreboard(week) if me in (m.home_team, m.away_team)), None
     )
     opp, my_cats, opp_cats = None, None, None
     if matchup:
@@ -212,8 +218,8 @@ def build_dashboard(league, me, now, news):
             "pos": "/".join(s for s in p.eligibleSlots if s in ("PG", "SG", "SF", "PF", "C")),
             "team": p.proTeam,
             "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
-            "games_left": len(game_dates(p, today, sunday)),
-            "upcoming": upcoming_games(p, today, sunday),
+            "games_left": len(game_dates(p, start, sunday)),
+            "upcoming": upcoming_games(p, start, sunday),
             "news": news.get(p.playerId, []),
         }
 
@@ -221,10 +227,11 @@ def build_dashboard(league, me, now, news):
         "league": league.settings.name,
         "team": me.team_name,
         "roster": [player_row(p) for p in me.roster],
-        "week": {"start": monday.isoformat(), "today": today.isoformat()},
+        "week": {"start": monday.isoformat(), "today": today.isoformat(), "number": week, "current": current,
+                 "count": len(getattr(league.settings, "matchup_periods", None) or {}) or max(week, current)},
         "opponent": None,
     }
-    lineups = day_lineups(league, monday, today, {me.team_id} | ({opp.team_id} if opp else set()))
+    lineups = day_lineups(league, monday, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, monday, today, lineups), "nba": nba_games(league, monday)}
     if opp:
         mine_proj = project(me.roster, my_cats, now, sunday, me.team_id, lineups)
@@ -244,10 +251,11 @@ def build_dashboard(league, me, now, news):
 
 
 @app.get("/api/dashboard")
-def dashboard(refresh: bool = False):
+def dashboard(refresh: bool = False, week: Annotated[int | None, Query(ge=1, le=30)] = None):
     # Refresh may skip the cache only after 60s, so repeat clicks can't flood ESPN with your cookie
-    if _cache["data"] and time.time() - _cache["at"] < (60 if refresh else CACHE_SECONDS):
-        return _cache["data"]
+    hit = _cache.get(week)
+    if hit and time.time() - hit["at"] < (60 if refresh else CACHE_SECONDS):
+        return hit["data"]
     if not os.environ.get("LEAGUE_ID"):
         raise HTTPException(500, "LEAGUE_ID not set. Copy .env.example to .env and fill it in.")
     try:
@@ -260,9 +268,9 @@ def dashboard(refresh: bool = False):
     except Exception as e:
         raise HTTPException(502, f"ESPN refused the request ({e}). Check LEAGUE_ID, ESPN_S2 and SWID; the cookies expire.")
     me = find_my_team(league, os.environ.get("TEAM_ID"), os.environ.get("SWID"))
-    data = build_dashboard(league, me, datetime.now(), player_news(league, me.roster))
+    data = build_dashboard(league, me, datetime.now(), player_news(league, me.roster), week)
     data["updated"] = datetime.now(timezone.utc).isoformat()  # when ESPN was last pulled; the browser shows it in local time
-    _cache.update(at=time.time(), data=data)
+    _cache[week] = {"at": time.time(), "data": data}
     return data
 
 
@@ -309,7 +317,7 @@ def vs_team(player_id: int, opp: str):
     if opp not in PRO_TEAM_MAP.values():
         raise HTTPException(400, "Unknown team")
     # only your roster, so outsiders can't make the server fetch (and cache) every NBA player
-    if player_id not in {p["id"] for p in (_cache["data"] or {}).get("roster", [])}:
+    if player_id not in {p["id"] for hit in _cache.values() for p in hit["data"].get("roster", [])}:
         raise HTTPException(404, "Player not on your roster")
     games = []
     for season in range(current_season(), current_season() - H2H_SEASONS, -1):
