@@ -62,16 +62,16 @@ def record(res):
     return f'{sum(r == "W" for r in res.values())}-{sum(r == "L" for r in res.values())}-{sum(r == "T" for r in res.values())}'
 
 
-def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, day_caps=None):
+def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions):
     """Greedy week plan.
 
     days: remaining dates in order. slots: starting spots per day.
     mine: [{"id", "name", "games": {date: line}}] - games that count for you (starter, not OUT, not started yet).
     free_agents: [{"id", "name", "lines": {date: line}}] - every remaining game of each free agent.
-    droppable: ids you are willing to drop. acquisitions: adds you may still make this week.
-    day_caps: {date: adds still allowed that day} when the league limits adds per day; None means no daily limit.
+    droppable: ids you are willing to drop. acquisitions: the most adds you may still make this week.
     Each step tries every add (on one of the free agent's game days) with every allowed drop that day,
-    and keeps the move that raises the projected category score most. Stops when no move helps.
+    and keeps the move that wins the most categories (closeness breaks ties). A move is only made if it wins
+    at least one more category, so the plan uses as few adds as it needs; it stops when no add flips anything.
     """
     roster = [dict(p, games=dict(p["games"])) for p in mine]
     used = {d: sum(d in p["games"] for p in roster) for d in days}
@@ -107,8 +107,6 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
             if fa["id"] in taken:
                 continue
             for day in sorted(fa["lines"]):
-                if day_caps is not None and sum(m["day"] == day for m in moves) >= day_caps.get(day, 0):
-                    continue
                 for drop in roster:
                     if drop["id"] in dropped:
                         continue
@@ -121,7 +119,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                     if not games:
                         continue
                     s = score(totals(current, new_roster), opp_totals)
-                    if s > best and (pick is None or s > pick[0]):
+                    if s[0] > best[0] and (pick is None or s > pick[0]):
                         pick = (s, fa, drop, day, new_roster, new_used, games)
         if not pick:
             break

@@ -242,11 +242,11 @@ info = server.acquisitions_left(acq_league, me, MON, MON + timedelta(days=6), 5)
 assert (info["limit"], info["used"], info["left"]) == (7, 2, 5), info
 assert [c["player"] for c in info["counted"]] == ["x", "z"] and len(info["recent"]) == 3  # recent also has last week's add
 assert info["counter"] == {"this_week": 1, "by_week": {"5": 1}, "season": 9} and info["errors"] == []
-# your league: limit 1 "per scoring period" = 1 add a day -> 7 a week; 1 add so far -> 6 left
+# your league: limit 1 "per scoring period" -> 1 x 7 days = 7 this matchup; 1 add so far -> 6 left
 daily_league = NS(settings=NS(matchup_acquisition_limit=1, matchup_limit_per_scoring_period=True),
                   recent_activity=lambda size: [acts[0]], espn_request=NS(league_get=lambda params: teams_raw))
 info = server.acquisitions_left(daily_league, me, MON, MON + timedelta(days=6), 5)
-assert (info["limit"], info["daily_limit"], info["used"], info["left"]) == (7, 1, 1, 6), info
+assert (info["limit"], info["per_period"], info["used"], info["left"]) == (7, 1, 1, 6), info
 broken = server.acquisitions_left(NS(settings=NS(matchup_acquisition_limit=-1), recent_activity=lambda size: 1 / 0,
                                      espn_request=NS(league_get=lambda params: {})), me, MON, MON, 5)
 assert broken["limit"] is None and broken["left"] is None and len(broken["errors"]) == 2, broken
@@ -259,7 +259,7 @@ league.scoreboard = lambda week: [NS(home_team=me, away_team=opp, home_team_cats
 server.connect = lambda: (league, me)
 server.free_agents = lambda lg: [fa]
 server.day_lineups = lambda *a: {}
-server.acquisitions_left = lambda *a: {"limit": 4, "daily_limit": None, "used": 2, "left": 2, "counted": []}
+server.acquisitions_left = lambda *a: {"limit": 4, "per_period": None, "used": 2, "left": 2, "counted": []}
 server.datetime = type("D", (datetime,), {"now": classmethod(lambda c, tz=None: NOW)})
 out = server.stream(drops="51,999,abc", plan=True)
 assert out["acquisitions"]["left"] == 2 and out["opponent"] == opp.team_name
