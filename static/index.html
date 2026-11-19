@@ -83,6 +83,22 @@
   .nav-row { display:flex; gap:var(--sp-2); }
   .nav-row { flex-wrap:wrap; justify-content:flex-end; }
   .nav-row a.button:not([aria-current]) { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .drop .switch { margin-left:auto; min-width:6.5em; }
+  .switch[aria-checked="true"][data-drop] { background:var(--loss); color:#111; }
+  .rd-wrap { display:grid; grid-template-columns:minmax(280px, 400px) 1fr; gap:var(--sp-3); align-items:center; }
+  @media (max-width: 700px) { .rd-wrap { grid-template-columns:1fr; } }
+  .radar { width:100%; height:auto; }
+  .rd-ring { fill:none; stroke:var(--line); }
+  .rd-b { fill:none; stroke:var(--text); stroke-width:1.5; }
+  .rd-a-fill { fill:rgb(245 158 11 / .35); stroke:var(--accent); stroke-width:2.5; }
+  .rd-a-dot { fill:var(--accent); } .rd-b-dot { fill:var(--card); stroke:var(--text); stroke-width:1.5; }
+  .rd-cat { fill:var(--text-2); font:700 11px var(--font); }
+  .rd-val { fill:var(--muted); font:11px var(--font-num); } .rd-a { fill:var(--accent); color:var(--accent); font-weight:700; }
+  .rd-head { display:flex; justify-content:space-between; font:700 var(--fs-xs) var(--font); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .rd-who { display:grid; grid-template-columns:auto auto 1fr auto; align-items:center; gap:var(--sp-2); padding:var(--sp-2) 0; border-bottom:1px solid var(--line); }
+  .rd-who small { display:block; color:var(--muted); }
+  .sw { width:14px; height:14px; border-radius:3px; border:2px solid var(--text); }
+  .sw.a { background:var(--accent); border-color:var(--accent); }
   .drop { display:flex; align-items:center; gap:var(--sp-2); min-height:var(--tap); border-bottom:1px solid var(--line); cursor:pointer; }
   .drop input { width:18px; height:18px; accent-color:var(--focus); flex:none; }
   .drop small { display:block; color:var(--muted); }
@@ -424,9 +440,17 @@ const stream = { data: null, plan: null, acq: null, loading: false, error: null 
 let drops;  // player ids you're willing to drop; remembered in this browser only
 try { drops = new Set(JSON.parse(localStorage.getItem("drops") || "[]")); } catch { drops = new Set(); }
 
+// redraw the streaming page, keeping keyboard focus on the switch that was focused
+function redrawStream() {
+  if (location.hash !== "#streaming" || !lastData) return;
+  const keep = document.activeElement?.dataset?.drop;
+  render(lastData);
+  if (keep) document.querySelector(`[data-drop="${keep}"]`)?.focus();
+}
+
 async function loadStream(plan = false) {
   stream.loading = true;
-  if (location.hash === "#streaming" && lastData) render(lastData);
+  redrawStream();
   try {
     const q = new URLSearchParams({ drops: [...drops].join(",") });
     if (stream.acq !== null && stream.acq !== "") q.set("acq", stream.acq);
@@ -441,27 +465,28 @@ async function loadStream(plan = false) {
     stream.error = e.message;
   }
   stream.loading = false;
-  if (location.hash === "#streaming" && lastData) render(lastData);
+  redrawStream();
 }
 
 function streamView() {
   if (!stream.data) {
-    if (!stream.loading && !stream.error) loadStream();
+    if (!stream.loading && !stream.error) loadStream(drops.size > 0);  // plan right away if players are already droppable
     return `<section class="card">${stream.error ? `<p class="error">Could not load: ${esc(stream.error)}</p>` : '<p class="muted">Loading roster…</p>'}</section>`;
   }
   const s = stream.data, a = s.acquisitions;
   const acqNote = a.left != null ? `ESPN: ${a.left} left this matchup (${a.used} of ${a.limit} used)`
     : a.limit == null ? "ESPN shows no weekly limit; set how many adds to plan" : `Limit ${a.limit} a week; ESPN didn't say how many you've used`;
-  const roster = s.roster.map(p => `<label class="drop"><input type="checkbox" data-drop="${p.id}" ${drops.has(p.id) ? "checked" : ""}>
+  const roster = s.roster.map(p => `<div class="drop">
       <img class="pic sm" src="${headshot(p.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
       <span><b>${esc(p.name)}</b>${p.injury ? ` <span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}
-      <small>${esc(p.slot || "–")} · ${esc(p.team)} · ${p.starts_left} starts left this week${p.value != null ? ` · overall value ${p.value >= 0 ? "+" : ""}${p.value}` : ""}</small></span></label>`).join("");
-  const setup = `<section class="card"><h2>Players I'm willing to drop</h2>${roster}
+      <small>${esc(p.slot || "–")} · ${esc(p.team)} · ${p.starts_left} starts left this week${p.value != null ? ` · overall value ${p.value >= 0 ? "+" : ""}${p.value}` : ""}</small></span>
+      <button class="switch" role="switch" data-drop="${p.id}" aria-checked="${drops.has(p.id)}" aria-label="${esc(p.name)} droppable">${drops.has(p.id) ? "Droppable" : "Stay"}</button></div>`).join("");
+  const setup = `<section class="card"><h2>Who can go?</h2><p class="muted">Flip players to Droppable; the plan updates right away.</p>${roster}
     <div class="acq"><label for="acq"><b>Max adds</b></label>
       <input id="acq" type="number" inputmode="numeric" min="0" max="20" value="${esc(stream.acq ?? a.left ?? "")}">
       <span class="muted">${acqNote}</span></div>
     ${acqDetails(a, s.week)}
-    <button id="plan-btn" ${stream.loading ? "disabled" : ""}>${stream.loading ? "Planning…" : "Plan my pickups"}</button>
+    <p class="muted" aria-live="polite">${stream.loading ? "Planning…" : ""}</p>
     ${stream.error ? `<p class="error">${esc(stream.error)}</p>` : ""}</section>`;
   return `<div class="stack">${setup}</div><div class="stack">${planCard(s)}</div>`;
 }
@@ -479,11 +504,35 @@ function acqDetails(a, w) {
     ${a.errors.map(e => `<li class="error">${esc(e)}</li>`).join("")}</ul></details>`;
 }
 
+// Spider chart comparing two stat lines across the 9 categories. Each axis is scaled so the better of the two
+// reaches the edge (TO: fewer is better), so the bigger shape on an axis is the better player there.
+const RADAR_CATS = ["PTS", "3PM", "AST", "STL", "BLK", "REB", "FG%", "FT%", "TO"];
+function radar(a, b, aName, bName) {
+  const n = RADAR_CATS.length, R = 88, cx = 200, cy = 140;
+  const score = (c, v, w) => c === "TO" ? (v ? Math.min(v, w) / v : 1) : Math.max(v, w) ? v / Math.max(v, w) : 0;
+  const pt = (i, r) => { const t = -Math.PI / 2 + i * 2 * Math.PI / n; return [cx + r * Math.cos(t), cy + r * Math.sin(t)]; };
+  const poly = vals => vals.map((r, i) => pt(i, r).map(x => x.toFixed(1)).join(",")).join(" ");
+  const ring = f => `<polygon points="${poly(RADAR_CATS.map(() => R * f))}" class="rd-ring"/>`;
+  const va = RADAR_CATS.map(c => R * (0.15 + 0.85 * score(c, a[c], b[c]))), vb = RADAR_CATS.map(c => R * (0.15 + 0.85 * score(c, b[c], a[c])));
+  const labels = RADAR_CATS.map((c, i) => {
+    const [x, y] = pt(i, R + 30), anchor = Math.abs(x - cx) < 10 ? "middle" : x > cx ? "start" : "end";
+    return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" class="rd-cat">${c}</text>
+      <text x="${x.toFixed(1)}" y="${(y + 14).toFixed(1)}" text-anchor="${anchor}" class="rd-val"><tspan class="rd-a">${perGame(c, a[c])}</tspan> · ${perGame(c, b[c])}</text>`;
+  }).join("");
+  const dots = (vals, cls) => vals.map((r, i) => { const [x, y] = pt(i, r); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" class="${cls}"/>`; }).join("");
+  const summary = RADAR_CATS.map(c => `${c} ${perGame(c, a[c])} vs ${perGame(c, b[c])}`).join(", ");
+  return `<svg class="radar" viewBox="0 0 400 290" role="img" aria-label="${esc(aName)} vs ${esc(bName)}, per game: ${summary}">
+    ${[0.25, 0.5, 0.75, 1].map(ring).join("")}
+    ${RADAR_CATS.map((_, i) => { const [x, y] = pt(i, R); return `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" class="rd-ring"/>`; }).join("")}
+    <polygon points="${poly(vb)}" class="rd-b"/><polygon points="${poly(va)}" class="rd-a-fill"/>
+    ${dots(vb, "rd-b-dot")}${dots(va, "rd-a-dot")}${labels}</svg>`;
+}
+
 function planCard(s) {
   const head = `<h2>Pickup plan · week ${s.week.number}${s.opponent ? ` vs ${esc(s.opponent)}` : ""}</h2>`;
   if (!s.opponent) return `<section class="card">${head}<p class="muted">Bye week: no matchup to plan for.</p></section>`;
   const p = stream.plan;
-  if (!p) return `<section class="card">${head}<p class="muted">Tick the players you'd drop, check the number of adds, then press <b>Plan my pickups</b>.
+  if (!p) return `<section class="card">${head}<p class="muted">Flip the players you'd drop to <b>Droppable</b>; the plan appears here right away.
     The plan tries every top free agent with each player you'd drop, and suggests streams that win this week's categories and upgrades that make your team better overall.</p></section>`;
   const moves = p.moves.length ? `<ol class="moves">${p.moves.map(m => {
     const a = m.add.line || {}, b = m.drop.line || {};
@@ -491,9 +540,13 @@ function planCard(s) {
     const res = Object.fromEntries(CATS9.map(c => [c, cmpCat(c, left[c], right[c])]));
     return `<li class="move"><div class="meta-line"><span class="kind ${m.kind}">${m.kind === "upgrade" ? "Upgrade" : "Stream"}</span> ${gameDay(m.day)} ·
         ${m.games.length ? `counts ${m.games.length} game${m.games.length === 1 ? "" : "s"} this week (${m.games.map(gameDay).join(", ")})` : "no games left this week"} · ${m.next_games} next week</div>
-      ${vsHead({ id: m.add.id, name: "Add " + m.add.name, sub: "Season averages" }, { id: m.drop.id, name: "Drop " + m.drop.name, sub: "Season averages" })}
-      <div class="adj"><span>${adjText(m.add)}</span><span>${adjText(m.drop)}</span></div>
-      ${vsRows(CATS9, left, right, res, perGame)}
+      <div class="rd-wrap">${radar(left, right, m.add.name, m.drop.name)}
+        <div class="rd-legend"><div class="rd-head"><span>Season averages per game</span><span>9-cat value</span></div>
+          ${[[m.add, "a", "Add"], [m.drop, "b", "Drop"]].map(([x, k, verb]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
+            <img class="pic sm" src="${headshot(x.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+            <span><b>${verb} ${esc(x.name)}</b><small>${adjText(x)}</small></span>
+            <b class="${x.value >= 0 ? "pos" : "neg"}">${x.value >= 0 ? "+" : ""}${(x.value ?? 0).toFixed(1)}</b></div>`).join("")}
+          <p class="muted">Bigger on an axis = better there (TO: fewer). Values: <span class="rd-a">add</span> · drop.</p></div></div>
       <div class="meta-line">This week: ${m.week > 0 ? "+" : ""}${m.week} cat${Math.abs(m.week) === 1 ? "" : "s"} · Value this week + next: ${m.value >= 0 ? "+" : ""}${m.value}</div></li>`;
   }).join("")}</ol>`
     : '<p class="muted">No pickup improves your projected result with these drops and adds. Try allowing more drops.</p>';
@@ -804,8 +857,19 @@ $("#app").addEventListener("click", e => {
   openPlayer = open ? Number(b.dataset.news) : null;
 });
 $("#refresh").onclick = () => load(true);
-$("#app").addEventListener("input", e => { if (e.target.id === "acq") stream.acq = e.target.value; });
-$("#app").addEventListener("click", e => { if (e.target.closest("#plan-btn")) loadStream(true); });
+let planTimer;
+const planSoon = () => { clearTimeout(planTimer); planTimer = setTimeout(() => loadStream(true), 500); };  // wait for quick flips
+$("#app").addEventListener("input", e => { if (e.target.id === "acq") { stream.acq = e.target.value; planSoon(); } });
+$("#app").addEventListener("click", e => {
+  const sw = e.target.closest("[data-drop]");
+  if (!sw) return;
+  const id = Number(sw.dataset.drop);
+  drops.has(id) ? drops.delete(id) : drops.add(id);
+  try { localStorage.setItem("drops", JSON.stringify([...drops])); } catch {}
+  sw.setAttribute("aria-checked", drops.has(id));  // update in place so focus stays put
+  sw.textContent = drops.has(id) ? "Droppable" : "Stay";
+  planSoon();
+});
 // Week picker: every card reloads for the chosen matchup week
 $("#app").addEventListener("click", e => {
   const b = e.target.closest("[data-week]");
@@ -815,11 +879,7 @@ $("#app").addEventListener("change", e => {
   if (e.target.id === "week") { week = Number(e.target.value); load(); }
   if (e.target.id === "pl-roster") { planner.roster = e.target.value; render(lastData); }
   if (e.target.id === "pl-stat") { planner.stat = e.target.value; render(lastData); }
-  if (e.target.dataset.drop) {
-    const id = Number(e.target.dataset.drop);
-    e.target.checked ? drops.add(id) : drops.delete(id);
-    try { localStorage.setItem("drops", JSON.stringify([...drops])); } catch {}
-  }
+
 });
 // Games-per-team chips filter the roster guide
 $("#app").addEventListener("click", e => {

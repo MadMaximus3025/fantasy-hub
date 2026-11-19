@@ -59,6 +59,7 @@ tied = {c: 0 for c in st.CATS}
 weak, strong = [{"id": 1, "name": "Weak", "games": {}}], [{"id": 5, "name": "Strong", "lines": {}}]
 up = st.plan(D2, 1, weak, tied, {}, strong, droppable={1}, acquisitions=2, values={1: -0.5, 5: 1.0}, next_games={1: 4, 5: 4})
 assert [(x["kind"], x["add"]["name"], x["value"], x["next_games"]) for x in up["moves"]] == [("upgrade", "Strong", 6.0, 4)], up["moves"]
+assert (up["moves"][0]["add"]["value"], up["moves"][0]["drop"]["value"]) == (1.0, -0.5)  # per-game 9-cat values for the chart
 # no games this week or next: can't help, never suggested however good
 assert st.plan(D2, 1, weak, tied, {}, strong, droppable={1}, acquisitions=2, values={1: -2.0, 5: 3.0}, next_games={1: 4})["moves"] == []
 # a small two-week gain doesn't use an add

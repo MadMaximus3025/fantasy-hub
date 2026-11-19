@@ -182,7 +182,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         dropped.add(drop["id"])
         # display: season averages as ESPN shows them, plus the projection factor and its reason
         side = lambda p: {"id": p["id"], "name": p["name"], "line": p.get("season") or p.get("per_game"),
-                          "factor": p.get("factor") or 1, "note": p.get("note") or ""}
+                          "factor": p.get("factor") or 1, "note": p.get("note") or "", "value": round(values.get(p["id"], 0), 1)}
         moves.append({"day": day, "add": side(fa), "drop": side(drop),
                       "games": sorted(games), "why": fa.get("note", ""),
                       "kind": "stream" if dw > 0 else "upgrade", "week": dw, "value": round(dv, 2),
