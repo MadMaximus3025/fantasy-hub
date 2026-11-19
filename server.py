@@ -351,21 +351,32 @@ def free_agents(league, size=60):
     return [Player(p, league.year, league.pro_schedule) for p in data.get("players", [])]
 
 
-def acquisitions_left(league, me, first, last):
-    """(weekly limit, adds used this matchup, left); None where ESPN doesn't say or there is no limit.
+def acquisitions_left(league, me, first, last, week):
+    """Weekly add limit, adds used this matchup and adds left, plus what they were read from so the page can show it.
     Used = your free-agent and waiver adds dated inside the matchup, from ESPN's league activity log."""
     limit = league.settings.matchup_acquisition_limit
-    if not limit or limit < 0:
-        return None, None, None
+    info = {"limit": limit if limit and limit > 0 else None, "used": None, "left": None,
+            "counted": [], "recent": [], "counter": None, "errors": []}
     try:
         # shortcut: reads the league's 100 latest moves; a very busy league could push older adds this week out
-        activity = league.recent_activity(size=100)
-    except Exception:
-        return limit, None, None
-    used = sum(1 for a in activity if first <= datetime.fromtimestamp(a.date / 1000).date() <= last
-               for team, action, *_ in a.actions
-               if getattr(team, "team_id", None) == me.team_id and action in ("FA ADDED", "WAIVER ADDED"))
-    return limit, used, max(0, limit - used)
+        mine = [{"date": datetime.fromtimestamp(a.date / 1000).date().isoformat(), "action": action, "player": str(player)}
+                for a in league.recent_activity(size=100) for team, action, player, *_ in a.actions
+                if getattr(team, "team_id", None) == me.team_id and action in ("FA ADDED", "WAIVER ADDED")]
+        info["counted"] = [m for m in mine if first.isoformat() <= m["date"] <= last.isoformat()]
+        info["recent"] = mine[:5]  # your latest adds whatever their date, to check the week's dates
+        info["used"] = len(info["counted"])
+    except Exception as e:
+        info["errors"].append(f"activity log: {e}")
+    try:  # ESPN's own per-matchup counter, shown next to our count for comparison
+        teams = league.espn_request.league_get(params={"view": "mTeam"}).get("teams", [])
+        counter = next(t for t in teams if t["id"] == me.team_id).get("transactionCounter", {})
+        info["counter"] = {"this_week": counter.get("matchupAcquisitionTotals", {}).get(str(week)),
+                           "by_week": counter.get("matchupAcquisitionTotals"), "season": counter.get("acquisitions")}
+    except Exception as e:
+        info["errors"].append(f"team counter: {e}")
+    if info["limit"] is not None and info["used"] is not None:
+        info["left"] = max(0, info["limit"] - info["used"])
+    return info
 
 
 @app.get("/api/stream")
@@ -378,10 +389,10 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     first, last = week_dates(league, week, today)
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
     lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
-    limit, used, left = acquisitions_left(league, me, first, last)
+    acquisitions = acquisitions_left(league, me, first, last, week)
     out = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
            "opponent": opp.team_name if opp else None,
-           "acquisitions": {"limit": limit, "used": used, "left": left},
+           "acquisitions": acquisitions,
            "roster": [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
                        "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
                        "starts_left": len(game_lines(p, me.team_id, lineups, now, first, last))} for p in me.roster]}
@@ -399,7 +410,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         free_agents=[{"id": p.playerId, "name": f"{p.name} ({p.proTeam})", "lines": game_lines(p, None, lineups, now, first, last)}
                      for p in free_agents(league)],
         droppable=droppable,
-        acquisitions=acq if acq is not None else (left or 0),
+        acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
     )
     out["plan"]["opp_current"] = scores(opp_cats)
     out["plan"]["opp_players"] = streaming.rows(opp_players)

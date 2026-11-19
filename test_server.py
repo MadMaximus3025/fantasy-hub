@@ -236,9 +236,15 @@ acts = [NS(date=ms(TODAY), actions=[(me, "FA ADDED", "x"), (me, "DROPPED", "y")]
         NS(date=ms(MON), actions=[(me, "WAIVER ADDED", "z")]),
         NS(date=ms(MON - timedelta(days=1)), actions=[(me, "FA ADDED", "last week")]),
         NS(date=ms(TODAY), actions=[(opp, "FA ADDED", "theirs")])]
-acq_league = NS(settings=NS(matchup_acquisition_limit=7), recent_activity=lambda size: acts)
-assert server.acquisitions_left(acq_league, me, MON, MON + timedelta(days=6)) == (7, 2, 5)
-assert server.acquisitions_left(NS(settings=NS(matchup_acquisition_limit=-1)), me, MON, MON) == (None, None, None)
+teams_raw = {"teams": [{"id": 1, "transactionCounter": {"matchupAcquisitionTotals": {"5": 1}, "acquisitions": 9}}]}
+acq_league = NS(settings=NS(matchup_acquisition_limit=7), recent_activity=lambda size: acts, espn_request=NS(league_get=lambda params: teams_raw))
+info = server.acquisitions_left(acq_league, me, MON, MON + timedelta(days=6), 5)
+assert (info["limit"], info["used"], info["left"]) == (7, 2, 5), info
+assert [c["player"] for c in info["counted"]] == ["x", "z"] and len(info["recent"]) == 3  # recent also has last week's add
+assert info["counter"] == {"this_week": 1, "by_week": {"5": 1}, "season": 9} and info["errors"] == []
+broken = server.acquisitions_left(NS(settings=NS(matchup_acquisition_limit=-1), recent_activity=lambda size: 1 / 0,
+                                     espn_request=NS(league_get=lambda params: {})), me, MON, MON, 5)
+assert broken["limit"] is None and broken["left"] is None and len(broken["errors"]) == 2, broken
 
 fa = f(50, "Free Guy", [4, 5, 6], PTS=25)  # Fri-Sun, after NOW
 scrub = f(51, "Scrub", [], slot="BE")
@@ -248,7 +254,7 @@ league.scoreboard = lambda week: [NS(home_team=me, away_team=opp, home_team_cats
 server.connect = lambda: (league, me)
 server.free_agents = lambda lg: [fa]
 server.day_lineups = lambda *a: {}
-server.acquisitions_left = lambda *a: (4, 2, 2)
+server.acquisitions_left = lambda *a: {"limit": 4, "used": 2, "left": 2}
 server.datetime = type("D", (datetime,), {"now": classmethod(lambda c, tz=None: NOW)})
 out = server.stream(drops="51,999,abc", plan=True)
 assert out["acquisitions"]["left"] == 2 and out["opponent"] == opp.team_name
