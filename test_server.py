@@ -210,8 +210,16 @@ rows = server.planner_rows([a], 1, MON, sun, TODAY, lu)
 assert rows[0]["days"] == ["off", "start", "off", "start", "off", "off", "off"] and rows[0]["avg"]["PTS"] == 22
 pro2 = {1: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}, {"date": datetime(2026, 11, 30, 19).timestamp() * 1000}]},
         2: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}]}}
-assert server.team_games(NS(pro_schedule=pro2), MON, sun) == {"ATL": 1, "BOS": 1}  # Nov 30 is outside the week
+assert server.team_games(NS(pro_schedule=pro2), MON, sun) == {"ATL": [0, 1, 0, 0, 0, 0, 0], "BOS": [0, 1, 0, 0, 0, 0, 0]}  # Nov 30 is outside the week
 assert set(d["planner"]) == {"mine", "teams", "theirs"}
+# impact: started days scored, other days blank; week = sum; opponents per day; two best categories
+jj_row = d["planner"]["mine"][0]
+assert [x is not None for x in jj_row["impact"]] == [s == "start" for s in jj_row["days"]], jj_row
+assert jj_row["impact_week"] == round(sum(x for x in jj_row["impact"] if x is not None), 1)
+assert jj_row["opps"][0] == "BOS" and jj_row["opps"][1] is None and len(jj_row["top"]) == 2
+# a better line scores higher impact than a worse one against the same pool
+zs = __import__("streaming").zscorer({1: {"PTS": 20, "FGM": 8, "FGA": 16}, 2: {"PTS": 5, "FGM": 2, "FGA": 8}})
+assert sum(zs({"PTS": 30, "FGM": 12, "FGA": 20}).values()) > sum(zs({"PTS": 4, "FGM": 1, "FGA": 9}).values())
 # live category leaders from ESPN's current scores (cats fixture: you PTS 50 / REB 20, opponent nothing yet)
 live = d["projection"]["current"]["result"]
 assert live["PTS"] == "W" and live["REB"] == "W" and live["AST"] == "T", live

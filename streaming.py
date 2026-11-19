@@ -16,23 +16,35 @@ STREAM_TOLERANCE = 4.0  # a stream may cost up to this much two-week value (abou
 UPGRADE_MIN = 2.0       # a move that wins nothing this week must add at least this much two-week value
 
 
+def zscorer(lines):
+    """Score any stat line per category against this pool of per-game lines: {cat: z-score}.
+    TO counts negative; FG%/FT% are makes above what an average shooter makes on the same attempts."""
+    pool = list(lines.values())
+    fg = sum(l.get("FGM", 0) for l in pool) / (sum(l.get("FGA", 0) for l in pool) or 1)
+    ft = sum(l.get("FTM", 0) for l in pool) / (sum(l.get("FTA", 0) for l in pool) or 1)
+
+    def raw(l):
+        r = {c: l.get(c, 0) for c in ("PTS", "REB", "AST", "STL", "BLK", "3PM")}
+        r["TO"] = -l.get("TO", 0)
+        r["FG%"] = l.get("FGM", 0) - fg * l.get("FGA", 0)
+        r["FT%"] = l.get("FTM", 0) - ft * l.get("FTA", 0)
+        return r
+
+    rows = [raw(l) for l in pool]
+    stats = {}
+    for c in CATS:
+        vals = [r[c] for r in rows]
+        mean = sum(vals) / len(vals)
+        stats[c] = (mean, (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5 or 1)
+    return lambda l: {c: (v - stats[c][0]) / stats[c][1] for c, v in raw(l).items()}
+
+
 def player_values(lines):
-    """Per-game 9-cat value of each player: sum of z-scores against the pool (TO negative, FG%/FT% weighted by attempts)."""
+    """Per-game 9-cat value of each player: sum of z-scores against the pool (see zscorer)."""
     if len(lines) < 2:
         return {i: 0.0 for i in lines}
-    fg = sum(l["FGM"] for l in lines.values()) / (sum(l["FGA"] for l in lines.values()) or 1)
-    ft = sum(l["FTM"] for l in lines.values()) / (sum(l["FTA"] for l in lines.values()) or 1)
-    cols = [{i: l[c] for i, l in lines.items()} for c in ("PTS", "REB", "AST", "STL", "BLK", "3PM")]
-    cols.append({i: -l["TO"] for i, l in lines.items()})
-    cols.append({i: l["FGM"] - fg * l["FGA"] for i, l in lines.items()})  # makes above an average shooter's
-    cols.append({i: l["FTM"] - ft * l["FTA"] for i, l in lines.items()})
-    value = {i: 0.0 for i in lines}
-    for col in cols:
-        mean = sum(col.values()) / len(col)
-        sd = (sum((v - mean) ** 2 for v in col.values()) / len(col)) ** 0.5 or 1
-        for i, v in col.items():
-            value[i] += (v - mean) / sd
-    return value
+    z = zscorer(lines)
+    return {i: sum(z(l).values()) for i, l in lines.items()}
 
 
 def totals(current, players):

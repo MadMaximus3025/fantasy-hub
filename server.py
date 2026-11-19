@@ -181,16 +181,32 @@ def planner_rows(roster, team_id, start, end, today, lineups):
              "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
              "avg": {k: season_avg(p).get(k, 0) for k in keep},
              "days": [day_state(p, team_id, d, today, lineups) for d in days],
-             "actual": [real(p, d) for d in days]} for p in roster]
+             "actual": [real(p, d) for d in days],
+             "opps": [next((g["team"] for g in p.schedule.values() if g["date"].date() == d), None) for d in days]}
+            for p in roster]
+
+
+def add_impact(rows):
+    """Per-game impact for the planner: each started day's line (actual, else season average) scored across the 9
+    categories against both rosters' averages, the week's total, and each player's two strongest categories."""
+    if not rows:
+        return
+    z = streaming.zscorer({i: r["avg"] for i, r in enumerate(rows)})
+    for r in rows:
+        r["impact"] = [round(sum(z(r["actual"][i] or r["avg"]).values()), 1) if s == "start" else None
+                       for i, s in enumerate(r["days"])]
+        r["impact_week"] = round(sum(v for v in r["impact"] if v is not None), 1)
+        r["top"] = [c for c, _ in sorted(z(r["avg"]).items(), key=lambda kv: -kv[1])[:2]]
 
 
 def team_games(league, start, end):
-    """Games each NBA team plays in the week, by fantasy team code."""
-    counts = Counter()
+    """Each NBA team's games per day of the week (1/0 per day), by fantasy team code; the page sums the days picked."""
+    days = days_between(start, end)
+    out = {}
     for team_id, periods in getattr(league, "pro_schedule", {}).items():
         dates = {datetime.fromtimestamp(g["date"] / 1000).date() for games in periods.values() for g in games}
-        counts[PRO_TEAM_MAP.get(team_id, str(team_id))] = sum(start <= d <= end for d in dates)
-    return dict(counts)
+        out[PRO_TEAM_MAP.get(team_id, str(team_id))] = [int(d in dates) for d in days]
+    return out
 
 
 def nba_games(league, start, end):
@@ -417,6 +433,7 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
             "players": {"mine": contributions(me.roster, now, first, last, me.team_id, lineups),
                         "theirs": contributions(opp.roster, now, first, last, opp.team_id, lineups)},
         }
+    add_impact(data["planner"]["mine"] + data["planner"].get("theirs", []))  # scored against both rosters together
     return data
 
 
