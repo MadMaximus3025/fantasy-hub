@@ -226,15 +226,34 @@ def scores(current_cats):
     return {k: (v or {}).get("score", 0) for k, v in (current_cats or {}).items()}
 
 
+def starts_left(p, now, start, end, team_id=None, lineups=None):
+    """Games p starts this week that haven't begun (played ones are in the current matchup totals already)."""
+    return sum(1 for x in p.schedule.values()
+               if now < x["date"] and start <= x["date"].date() <= end and starting(p, team_id, x["date"].date(), lineups))
+
+
+def availability(roster, now, start, end, team_id=None, lineups=None):
+    """Injured or questionable players with starts left: their remaining line and whether the projection counts them
+    (OUT players don't; day-to-day ones do), so the page can flip each one between plays and sits."""
+    rows = []
+    for p in roster:
+        if p.injuryStatus in (None, "", "ACTIVE", "NORMAL"):
+            continue
+        g = starts_left(p, now, start, end, team_id, lineups)
+        if g:
+            avg = season_avg(p)
+            rows.append({"id": p.playerId, "name": p.name, "status": p.injuryStatus, "games": g, "counted": p.injuryStatus != "OUT",
+                         "line": {k: avg.get(k, 0) * g for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
+    return rows
+
+
 def contributions(roster, now, start, end, team_id=None, lineups=None):
     """Each starter's projected stats for the rest of the week: season average x starts not played yet. OUT players skip."""
     rows = []
     for p in roster:
         if p.injuryStatus == "OUT":
             continue
-        # games already played are in the current matchup totals; counting them again would double them
-        g = sum(1 for x in p.schedule.values()
-                if now < x["date"] and start <= x["date"].date() <= end and starting(p, team_id, x["date"].date(), lineups))
+        g = starts_left(p, now, start, end, team_id, lineups)
         if not g:
             continue
         avg = season_avg(p)
@@ -433,6 +452,8 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
                         "result": compare(scores(my_cats), scores(opp_cats))},  # who leads each category right now
             "players": {"mine": contributions(me.roster, now, first, last, me.team_id, lineups),
                         "theirs": contributions(opp.roster, now, first, last, opp.team_id, lineups)},
+            "availability": {"mine": availability(me.roster, now, first, last, me.team_id, lineups),
+                             "theirs": availability(opp.roster, now, first, last, opp.team_id, lineups)},
         }
     add_impact(data["planner"]["mine"] + data["planner"].get("theirs", []))  # scored against both rosters together
     return data

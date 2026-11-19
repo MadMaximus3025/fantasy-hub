@@ -212,6 +212,12 @@ pro2 = {1: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}, {"dat
         2: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}]}}
 assert server.team_games(NS(pro_schedule=pro2), MON, sun) == {"ATL": [0, 1, 0, 0, 0, 0, 0], "BOS": [0, 1, 0, 0, 0, 0, 0]}  # Nov 30 is outside the week
 assert set(d["planner"]) == {"mine", "teams", "theirs"}
+# availability: OUT / day-to-day players with starts left, their remaining line, and whether they're counted now
+av = server.availability([f(1, "a", [3, 5]), f(2, "b", [4], injury="OUT"), f(3, "c", [5], injury="DAY_TO_DAY"),
+                          f(4, "d", [], injury="OUT"), f(5, "e", [4], injury="OUT", slot="BE")], NOW, MON, MON + timedelta(days=6), 1, None)
+assert [(r["name"], r["status"], r["games"], r["counted"], r["line"]["PTS"]) for r in av] == [
+    ("b", "OUT", 1, False, 22), ("c", "DAY_TO_DAY", 1, True, 22)], av  # healthy, no games, and bench players left out
+assert set(d["projection"]["availability"]) == {"mine", "theirs"}
 # impact: started days scored, other days blank; week = sum; opponents per day; two best categories
 jj_row = d["planner"]["mine"][0]
 assert [x is not None for x in jj_row["impact"]] == [s == "start" for s in jj_row["days"]], jj_row

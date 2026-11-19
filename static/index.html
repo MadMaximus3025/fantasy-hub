@@ -39,6 +39,46 @@
   .refresh { display:flex; flex-direction:column; align-items:flex-end; gap:var(--sp-1); }
   main { display:grid; grid-template-columns: 1.6fr 1fr; gap:var(--sp-2); padding:0 var(--sp-4) var(--sp-4); }
   main.planner { grid-template-columns: 1fr 1.8fr; }
+  .wide { grid-column:1 / -1; }
+  .mc-grid { display:grid; grid-template-columns:1.4fr 1fr; gap:var(--sp-4); }
+  .mc-side { border-left:1px solid var(--line); padding-left:var(--sp-4); }
+  @media (max-width: 900px) { .mc-grid { grid-template-columns:1fr; } .mc-side { border-left:0; padding-left:0; border-top:1px solid var(--line); padding-top:var(--sp-3); } }
+  .mc-big { display:flex; align-items:baseline; gap:var(--sp-3); }
+  .mc-big .num { font:800 64px/1 var(--font-num); }
+  .mc-big span:last-child { font-weight:700; color:var(--text-2); text-transform:uppercase; letter-spacing:.5px; font-size:var(--fs-sm); }
+  .mc-sub { color:var(--text-2); }
+  .pos { color:var(--win); } .neg { color:var(--loss); }
+  .mc-labels, .mc-row { display:grid; grid-template-columns:5.5em 1fr 5.5em 3.5em; align-items:center; gap:var(--sp-2); }
+  .mc-labels { font:700 var(--fs-xs) var(--font); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-top:var(--sp-3); }
+  .mc-labels span:first-child { text-align:right; } .mc-labels span:last-child { text-align:right; }
+  .mc-labels span:nth-child(3) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  a { color:var(--you); }
+  .mc-row { padding:5px 0; border-bottom:1px solid var(--line); }
+  .mc-v { font:600 var(--fs-md) var(--font-num); } .mc-v.you { text-align:right; }
+  .mc-bar { position:relative; height:22px; }
+  .mc-bar::before { content:""; position:absolute; left:0; right:0; top:50%; border-top:1px solid var(--line); }
+  .mc-fill { position:absolute; top:6px; height:10px; border-radius:5px; }
+  .mc-fill.you { background:var(--you); } .mc-fill.opp { background:var(--opp); }
+  .mc-cat { position:absolute; left:50%; top:50%; transform:translate(-50%, -50%); font:700 var(--fs-xs) var(--font); background:var(--card); border:1px solid var(--line); border-radius:var(--r-pill); padding:1px 8px; }
+  .mc-p { font:700 var(--fs-sm) var(--font-num); text-align:right; } .mc-p.mid { color:var(--accent); }
+  .tiles3 { display:grid; grid-template-columns:repeat(3, 1fr); gap:var(--sp-2); margin-bottom:var(--sp-3); }
+  .tiles3 .tile span { display:block; font:700 var(--fs-xs) var(--font); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .tiles3 .tile b { display:block; font:800 var(--fs-xl) var(--font-num); }
+  .tiles3 .tile small { color:var(--muted); }
+  .mc-side h3 { font:700 var(--fs-xs) var(--font); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin:var(--sp-3) 0 var(--sp-2); }
+  .mc-side h3 small { text-transform:none; letter-spacing:0; font-weight:400; margin-left:var(--sp-2); }
+  .who-grid { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-3); }
+  .who h3 { margin-top:0; }
+  .who-row { display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:var(--sp-2); padding:var(--sp-1) 0; }
+  .who-row small { display:block; color:var(--muted); }
+  .switch { min-width:4.5em; justify-content:center; }
+  .switch[aria-checked="false"] { background:var(--surface-2); color:var(--text-2); border:1px solid var(--line); }
+  .nn-row { display:grid; grid-template-columns:4.5em 1fr 3.5em 2em; align-items:center; gap:var(--sp-2); padding:3px 0; font-size:var(--fs-sm); }
+  .nn-row.past { opacity:.75; } .nn-row.today .nn-day { font-weight:800; color:var(--text); }
+  .nn-day { color:var(--muted); }
+  .nn-bars { display:grid; gap:2px; }
+  .nn-bars .bar { display:block; height:6px; border-radius:3px; } .nn-bars .bar.you { background:var(--you); } .nn-bars .bar.opp { background:var(--opp); }
+  .nn-n { font-family:var(--font-num); text-align:right; } .nn-d { font:700 var(--fs-sm) var(--font-num); text-align:right; }
   @media (max-width: 900px) { main, main.planner { grid-template-columns:1fr; } }
   .nav-row { display:flex; gap:var(--sp-2); }
   .nav-row { flex-wrap:wrap; justify-content:flex-end; }
@@ -243,6 +283,103 @@ const headshot = id => `https://a.espncdn.com/i/headshots/nba/players/full/${id}
 
 const gameDay = iso => new Date(iso + "T00:00").toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" });
 
+// ---- Dashboard matchup card: category odds, who plays toggles, night by night ----
+const sits = {};  // player id -> true (sits) / false (plays) when flipped on the page; default: OUT sits, others play
+const isPlaying = a => sits[a.id] === undefined ? a.counted : !sits[a.id];
+// shortcut: rough game-to-game spread per counting stat (variance ≈ k × expected total); calibrate against real weeks
+const SPREAD = { PTS: 2, REB: 1.5, AST: 1.5, STL: 1.2, BLK: 1.5, "3PM": 1.3, TO: 1.2 };
+const KEYS = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FGM", "FGA", "FTM", "FTA"];
+const erf = x => {  // Abramowitz-Stegun 7.1.26
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return x >= 0 ? y : -y;
+};
+const normCdf = z => 0.5 * (1 + erf(z / Math.SQRT2));
+
+// Remaining stats for one team: the projection's counted players, adjusted by the plays/sits toggles
+function teamLine(current, rows, avail) {
+  const rem = Object.fromEntries(KEYS.map(k => [k, rows.reduce((t, r) => t + (r[k] || 0), 0)]));
+  for (const a of avail) {
+    const sign = isPlaying(a) && !a.counted ? 1 : !isPlaying(a) && a.counted ? -1 : 0;
+    for (const k of KEYS) rem[k] += sign * (a.line[k] || 0);
+  }
+  const tot = Object.fromEntries(["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO"].map(c => [c, (current[c] || 0) + rem[c]]));
+  tot["FG%"] = rem.FGA ? rem.FGM / rem.FGA : current["FG%"] || 0;  // like the server: percentages from games left only
+  tot["FT%"] = rem.FTA ? rem.FTM / rem.FTA : current["FT%"] || 0;
+  return { tot, rem };
+}
+
+function matchupOdds(d) {
+  const p = d.projection, av = p.availability || { mine: [], theirs: [] };
+  const A = teamLine(p.current.mine, p.players.mine, av.mine), B = teamLine(p.current.theirs, p.players.theirs, av.theirs);
+  const prob = {};
+  for (const c of CATS9) {
+    let diff = A.tot[c] - B.tot[c], v;
+    if (c === "TO") diff = -diff;
+    if (c.endsWith("%")) {
+      const k = c === "FG%" ? "FGA" : "FTA", pa = A.tot[c], pb = B.tot[c];
+      v = (A.rem[k] ? pa * (1 - pa) / A.rem[k] : 0) + (B.rem[k] ? pb * (1 - pb) / B.rem[k] : 0);
+    } else v = SPREAD[c] * (A.rem[c] + B.rem[c]);
+    prob[c] = v > 0 ? normCdf(diff / Math.sqrt(v)) : diff > 0 ? 1 : diff < 0 ? 0 : 0.5;
+  }
+  // chance of winning more categories: combine the 9 independent category chances
+  let dist = [1];
+  for (const c of CATS9) dist = dist.map((x, k) => x * (1 - prob[c])).concat(0).map((x, k) => x + (k ? dist[k - 1] * prob[c] : 0));
+  const win = dist.slice(5).reduce((t, x) => t + x, 0);
+  const expected = CATS9.reduce((t, c) => t + prob[c], 0);
+  return { mine: A.tot, theirs: B.tot, prob, win, expected, swing: CATS9.filter(c => prob[c] >= 0.35 && prob[c] <= 0.65) };
+}
+
+function matchupCard(d) {
+  const w = d.week, days = weekDays(d), today = new Date(w.today + "T00:00");
+  const md = dt => dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const head = `<div class="slate-head"><h2>Week ${w.number} · ${md(days[0])} – ${md(days[days.length - 1])}${d.opponent ? ` · vs ${esc(d.opponent)}` : ""}</h2>${weekPicker(d)}</div>`;
+  if (!d.projection) return `<section class="card wide">${head}<p class="muted">Bye week: no matchup.</p></section>`;
+  const o = matchupOdds(d), pc = x => `${Math.round(x * 100)}%`;
+  const final = days.filter(dt => dt < today).length;
+  const cats = CATS9.map(c => {
+    const pr = o.prob[c], lean = (pr - 0.5) * 2;  // -1 they're sure to win … +1 you are
+    return `<div class="mc-row"><span class="mc-v you">${fmt(c, o.mine[c])}</span>
+      <span class="mc-bar"><span class="mc-fill ${lean >= 0 ? "you" : "opp"}" style="${lean >= 0 ? "right:50%" : "left:50%"};width:${Math.abs(lean) * 50}%"></span><span class="mc-cat">${c}</span></span>
+      <span class="mc-v opp">${fmt(c, o.theirs[c])}</span><span class="mc-p ${pr >= 0.65 ? "pos" : pr <= 0.35 ? "neg" : "mid"}">${pc(pr)}</span></div>`;
+  }).join("");
+  const av = d.projection.availability || { mine: [], theirs: [] };
+  const who = (rows, label) => `<div class="who"><h3>${label}</h3>${rows.length ? rows.map(a => `<div class="who-row">
+      <img class="pic sm" src="${headshot(a.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+      <span><b>${esc(a.name)}</b><small>${esc(a.status.replace("_", " "))} · ${a.games} game${a.games === 1 ? "" : "s"} left</small></span>
+      <button class="switch" role="switch" data-toggle="${a.id}" aria-checked="${isPlaying(a)}" aria-label="${esc(a.name)} plays">${isPlaying(a) ? "Plays" : "Sits"}</button></div>`).join("")
+    : '<p class="muted">Everyone healthy.</p>'}</div>`;
+  const mine = d.slate.mine, theirs = d.slate.theirs || mine.map(() => 0), max = Math.max(1, ...mine, ...theirs);
+  const nights = days.map((dt, i) => `<div class="nn-row${dt.getTime() === today.getTime() ? " today" : ""}${dt < today ? " past" : ""}">
+      <span class="nn-day">${dt.getTime() === today.getTime() ? "Today" : dt.toLocaleDateString(undefined, { weekday: "short" }) + " " + dt.getDate()}</span>
+      <span class="nn-bars"><span class="bar you" style="width:${mine[i] / max * 100}%"></span><span class="bar opp" style="width:${theirs[i] / max * 100}%"></span></span>
+      <span class="nn-n">${mine[i]} v ${theirs[i]}</span><span class="nn-d ${mine[i] - theirs[i] > 0 ? "pos" : mine[i] - theirs[i] < 0 ? "neg" : ""}">${mine[i] - theirs[i] > 0 ? "+" : ""}${mine[i] - theirs[i]}</span></div>`).join("");
+  const todo = o.swing.length
+    ? `The week turns on ${o.swing.map(c => `${c} (${pc(o.prob[c])})`).join(" and ")}: a streamer strong there helps most. <a href="#streaming">Plan pickups</a>.`
+    : `No category is a toss-up right now; ${o.win >= 0.5 ? "protect your leads" : "you need a big swing in several categories"}.`;
+  const p = d.projection;
+  return `<section class="card wide matchup">${head}<div class="mc-grid"><div>
+      <div class="mc-big"><span class="num">${o.expected.toFixed(1)}</span><span>of 9 categories expected</span></div>
+      <p class="mc-sub">vs <b>${esc(d.opponent)}</b> ${(9 - o.expected).toFixed(1)} · <b class="${o.win >= 0.5 ? "pos" : "neg"}">${pc(o.win)}</b> to take more categories · ${final} of ${days.length} nights final</p>
+      <div class="mc-labels"><span>You</span><span></span><span>${esc(d.opponent)}</span><span>Win %</span></div>
+      ${cats}
+      <details class="breakdown"><summary>Per-player breakdown</summary>
+        <p class="muted">Starters in your set ESPN lineup: season average × games not started yet, added to this week's totals so far. Plays/Sits toggles aren't reflected here.</p>
+        ${breakdownTable("You", p.players.mine, p.current.mine, p.mine)}
+        ${breakdownTable(d.opponent, p.players.theirs, p.current.theirs, p.theirs)}
+      </details></div>
+    <div class="mc-side">
+      <div class="tiles3"><div class="tile"><span>Win odds</span><b class="${o.win >= 0.5 ? "pos" : "neg"}">${pc(o.win)}</b><small>${final} of ${days.length} nights final</small></div>
+        <div class="tile"><span>Projected</span><b>${o.expected.toFixed(1)}</b><small>of 9 categories</small></div>
+        <div class="tile"><span>Swing</span><b>${o.swing.length}</b><small>categories 35–65%</small></div></div>
+      <h3>Who plays <small>flip to see the odds change</small></h3>
+      <div class="who-grid">${who(av.mine, "You")}${who(av.theirs, esc(d.opponent))}</div>
+      <h3>Night by night <small>starting games, you v them</small></h3>${nights}
+      <p><b>What to do:</b> ${todo}</p>
+      <p class="muted">Odds treat each category's projected margin against how much it usually swings over the games left; FG%/FT% use attempts left. A rough guide, not a guarantee.</p>
+    </div></div></section>`;
+}
+
 function rosterCard(d) {
   const rows = d.roster.map((p, i) => `
     <div class="player">
@@ -262,7 +399,9 @@ function rosterCard(d) {
         ${p.news.map(n => `<p><span class="tag">${esc(n.kind)}</span> <b>${esc(n.headline)}</b><br>${esc(n.tldr)}</p>`).join("")}
       </div>
     </div>`).join("");
-  return `<section class="card"><h2>Roster · ${d.roster.length} players</h2>${rows}</section>`;
+  // how many players can fill each position, e.g. 4×PG · 7×SG
+  const pos = ["PG", "SG", "SF", "PF", "C"].map(x => [x, d.roster.filter(p => p.pos.split("/").includes(x)).length]).filter(([, n]) => n).map(([x, n]) => `${n}×${x}`).join(" · ");
+  return `<section class="card wide"><div class="slate-head"><h2>${esc(d.team)} · ${d.roster.length} players</h2><span class="muted">${pos}</span></div>${rows}</section>`;
 }
 
 function weekPicker(d) {
@@ -510,32 +649,6 @@ function plannerView(d) {
   return `<div class="stack">${matchupGamesCard(d)}${teamGamesCard(d)}</div>${rosterGuideCard(d)}`;
 }
 
-function slateCard(d) {
-  const mine = d.slate.mine, theirs = d.slate.theirs || [], nba = d.slate.nba || [];
-  const start = new Date(d.week.start + "T00:00"), today = new Date(d.week.today + "T00:00");
-  const idx = Math.round((today - start) / 864e5);
-  const total = a => a.reduce((x, y) => x + y, 0);
-  const diff = total(mine) - total(theirs);
-  const date = i => new Date(start.getTime() + i * 864e5);
-  const md = dt => dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const days = mine.map((n, i) => `
-    <div class="day ${i === idx ? "today" : ""} ${i < idx ? "past" : ""}">
-      <div class="d">${date(i).toLocaleDateString(undefined, { weekday: "short" })}</div>
-      <div class="dn">${date(i).getDate()}</div>
-      <div class="n" title="Your starts">${n}</div>
-      ${d.opponent ? `<div class="o" title="Opponent starts">${theirs[i]}</div>` : ""}
-      <div class="nba">${nba[i] ?? "–"} NBA</div>
-      <div class="st">${i < idx ? "Past" : i === idx ? "Today" : ""}</div>
-    </div>`).join("");
-  return `<section class="card"><div class="slate-head"><h2>The weekly slate</h2>${weekPicker(d)}</div>
-    <div class="score"><span class="big">${total(mine)}</span>
-      ${d.opponent ? `<span class="vs">vs</span><span class="big">${total(theirs)}</span>
-      <span class="diff ${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : ""}${diff} games</span>` : ""}
-    </div>
-    <p class="meta">${md(date(0))}–${md(new Date(d.week.end + "T00:00"))} · ${d.opponent ? `vs ${esc(d.opponent)}` : "bye week"} · starting games</p>
-    <div class="days">${days}</div>
-    <p class="legend"><span>Top: you</span>${d.opponent ? "<span>Bottom: opponent</span>" : ""}</p></section>`;
-}
 
 // Live category scores from ESPN for the selected week, with who leads each one
 // ---- Versus view: left side vs right side, categories in the middle, winning side filled ----
@@ -567,27 +680,7 @@ const tally = res => { const n = r => Object.values(res).filter(x => x === r).le
 const scoreLine = (res, oppName) => { const [w, l, t] = tally(res);
   return `<div class="vs-score"><span class="you">${w}</span><small>you · ${t} tied · ${esc(oppName)}</small><span class="opp">${l}</span></div>`; };
 
-function currentCard(d) {
-  if (!d.projection || d.week.number !== d.week.current) return "";  // past weeks: the projection card shows the final
-  const cur = d.projection.current;
-  return `<section class="card"><h2>Current 9-cat score</h2>${scoreLine(cur.result, d.opponent)}
-    ${vsHead({ name: d.team, sub: "You" }, { name: d.opponent, sub: "Opponent" })}
-    ${vsRows(d.projection.cats, cur.mine, cur.theirs, cur.result)}
-    <p class="muted">Live totals from ESPN for this matchup. The leading side is filled green. TO: fewer wins.</p></section>`;
-}
 
-function projectionCard(d) {
-  if (!d.projection) return "";
-  const p = d.projection;
-  return `<section class="card"><h2>${d.week.number < d.week.current ? "Final" : "Projected"} 9-cat</h2>${scoreLine(p.result, d.opponent)}
-    ${vsHead({ name: d.team, sub: "You" }, { name: d.opponent, sub: "Opponent" })}
-    ${vsRows(p.cats, p.mine, p.theirs, p.result)}
-    <details class="breakdown"><summary>Per-player breakdown</summary>
-      <p class="muted">Starters in your set ESPN lineup: season average × games not started yet, added to this week's totals so far. Bench and IR don't count.</p>
-      ${breakdownTable("You", p.players.mine, p.current.mine, p.mine)}
-      ${breakdownTable(d.opponent, p.players.theirs, p.current.theirs, p.theirs)}
-    </details></section>`;
-}
 
 // One row per counted player: their projected stats for the rest of the week.
 function breakdownTable(team, players, current, total) {
@@ -612,7 +705,7 @@ function render(d) {
   $("#app").classList.toggle("planner", page !== "#");
   document.querySelectorAll(".nav-row a").forEach(a => a.getAttribute("href") === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
   $("#app").innerHTML = page === "#planner" ? plannerView(d) : page === "#streaming" ? streamView()
-    : rosterCard(d) + `<div class="stack">${slateCard(d)}${currentCard(d)}${projectionCard(d)}</div>`;
+    : matchupCard(d) + rosterCard(d);
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
 
@@ -736,6 +829,13 @@ $("#app").addEventListener("click", e => {
     planner.open.has(id) ? planner.open.delete(id) : planner.open.add(id);
     render(lastData);
     return document.querySelector(`[data-expand="${id}"]`)?.focus();
+  }
+  const sw = e.target.closest("[data-toggle]");
+  if (sw) {  // who-plays switch: flip plays/sits and recompute the matchup odds
+    const id = sw.dataset.toggle;
+    sits[id] = sw.getAttribute("aria-checked") === "true";
+    render(lastData);
+    return document.querySelector(`[data-toggle="${id}"]`)?.focus();
   }
   const dayBtn = e.target.closest("[data-day]");
   if (dayBtn) {  // games-per-team day filter: "All" clears, a day toggles
