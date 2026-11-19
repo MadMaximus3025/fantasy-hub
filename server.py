@@ -369,7 +369,7 @@ def acquisitions_left(league, me, first, last, week):
     """Weekly add limit, adds used this matchup and adds left, plus what they were read from so the page can show it.
     Used = your free-agent and waiver adds dated inside the matchup, from ESPN's league activity log."""
     limit = league.settings.matchup_acquisition_limit
-    limit = limit if limit and limit > 0 else None
+    limit = int(limit) if limit and limit > 0 else None  # ESPN may send 1.0; counts must be whole numbers
     # with ESPN's "per scoring period" flag the setting is per day; it counts toward the matchup as limit x days
     per_period = limit if limit and getattr(league.settings, "matchup_limit_per_scoring_period", False) else None
     info = {"limit": per_period * len(days_between(first, last)) if per_period else limit, "per_period": per_period,

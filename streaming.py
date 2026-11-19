@@ -100,7 +100,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         new_roster.append({"id": add["id"], "name": add["name"], "games": games})
         return new_roster, new_used, games
 
-    for _ in range(max(0, acquisitions)):
+    for _ in range(max(0, int(acquisitions))):
         pick = None
         taken = {p["id"] for p in roster}
         for fa in free_agents:

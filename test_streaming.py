@@ -48,4 +48,6 @@ p2 = st.plan(D, 3, me, opp, cur, fa2, droppable={2}, acquisitions=3)
 drops_made = [x["drop"]["id"] for x in p2["moves"]]
 assert len(drops_made) == len(set(drops_made)), p2["moves"]
 assert [x["day"] for x in p2["moves"]] == sorted(x["day"] for x in p2["moves"])
+# a float adds count (ESPN sends 6.0) works
+assert st.plan(D, 2, me, opp, cur, fa, droppable={2}, acquisitions=6.0)["moves"]
 print("ok")
