@@ -20,8 +20,9 @@ assert p0["moves"] == [], "nothing droppable -> no moves"
 p = st.plan(D, 2, me, opp, cur, fa, droppable={2}, acquisitions=3)
 m = p["moves"]
 assert m[0]["add"]["name"] == "Streamer" and m[0]["drop"]["name"] == "Scrub", m
-assert m[0]["day"] == D[1] and m[0]["games"] == D[1:], m  # added on his first game day, counts all three games
-assert p["after"]["mine"]["PTS"] == cur["PTS"] + 20 + 2 + 60, p["after"]  # Thursday games already counted; +3 streamer games
+assert m[0]["day"] <= D[1] and m[0]["games"] == D[1:], m  # added by his first game day, counts all three games
+scrub_thu = 2 if m[0]["day"] > D[0] else 0  # dropping Scrub today also drops his (poor-shooting) Thursday game
+assert p["after"]["mine"]["PTS"] == cur["PTS"] + 20 + scrub_thu + 60, p["after"]
 assert p["after"]["record"] != p["before"]["record"]
 assert all(x["add"]["name"] != "Dud" for x in m), "a move that doesn't help is never made"
 
@@ -34,7 +35,8 @@ assert st.plan(D, 1, full, opp, cur, fa, droppable={2}, acquisitions=3)["moves"]
 
 # only moves that win another category: a pickup that just narrows a gap isn't suggested
 small = [{"id": 30, "name": "Tiny", "lines": {D[1]: line(PTS=1)}}]
-assert st.plan(D, 3, me, opp, cur, small, droppable={2}, acquisitions=5)["moves"] == []
+empty = me + [{"id": 3, "name": "Empty", "games": {}}]  # dropping him changes nothing by itself
+assert st.plan(D, 3, empty, opp, cur, small, droppable={3}, acquisitions=5)["moves"] == []
 # as many adds as help, never more than allowed
 many = [{"id": 40 + i, "name": f"S{i}", "lines": {D[1]: big, D[2]: big, D[3]: big}} for i in range(5)]
 pm = st.plan(D, 9, me, opp, cur, many, droppable={1, 2}, acquisitions=1)
@@ -50,4 +52,25 @@ assert len(drops_made) == len(set(drops_made)), p2["moves"]
 assert [x["day"] for x in p2["moves"]] == sorted(x["day"] for x in p2["moves"])
 # a float adds count (ESPN sends 6.0) works
 assert st.plan(D, 2, me, opp, cur, fa, droppable={2}, acquisitions=6.0)["moves"]
+# overall value: a clearly better player is an upgrade even if no category flips this week
+D2 = D[:1]
+tied = {c: 0 for c in st.CATS}
+up = st.plan(D2, 1, [{"id": 1, "name": "Weak", "games": {}}], tied, {}, [{"id": 5, "name": "Strong", "lines": {}}],
+             droppable={1}, acquisitions=2, values={1: -2.0, 5: 1.5})
+assert [(x["kind"], x["add"]["name"], x["value"]) for x in up["moves"]] == [("upgrade", "Strong", 3.5)], up["moves"]
+# ...but a small gain doesn't use an add
+assert st.plan(D2, 1, [{"id": 1, "name": "Weak", "games": {}}], tied, {}, [{"id": 5, "name": "Strong", "lines": {}}],
+               droppable={1}, acquisitions=2, values={1: 0.0, 5: 0.3})["moves"] == []
+# a stream that would drop a much better player isn't made, even if it wins a category this week
+star = [{"id": 1, "name": "Star", "games": {}}]
+sfa = [{"id": 5, "name": "Streamer", "lines": {D[1]: big}}]
+assert st.plan(D, 1, star, opp, cur, sfa, droppable={1}, acquisitions=2, values={1: 4.0, 5: 0.0})["moves"] == []
+assert st.plan(D, 1, star, opp, cur, sfa, droppable={1}, acquisitions=2, values={1: 0.5, 5: 0.0})["moves"][0]["kind"] == "stream"
+
+# player values: better per-game lines score higher; efficient shooting counts; turnovers hurt
+lines = {1: line(PTS=25, REB=8, AST=6, STL=1, BLK=1, **{"3PM": 3}, TO=2, FGM=9, FGA=17, FTM=4, FTA=5),
+         2: line(PTS=8, REB=3, AST=1, TO=1, FGM=3, FGA=9, FTM=1, FTA=2),
+         3: line(PTS=8, REB=3, AST=1, TO=4, FGM=3, FGA=9, FTM=1, FTA=2)}
+v = st.player_values(lines)
+assert v[1] > v[2] > v[3], v
 print("ok")

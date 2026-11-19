@@ -560,21 +560,29 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         """A player for the planner, his lines scaled by role: recent minutes and role news."""
         factor, why = role_factor(p, news_items, now)
         lines = game_lines(p, team_id, lineups, now, first, last, factor)
-        return {"id": p.playerId, "name": name or p.name, "note": "; ".join(why), "games" if team_id else "lines": lines}
+        per_game = {k: season_avg(p).get(k, 0) * factor for k in streaming.KEYS}  # season-long value, role-adjusted
+        return {"id": p.playerId, "name": name or p.name, "note": "; ".join(why), "per_game": per_game,
+                "games" if team_id else "lines": lines}
 
     opp_players = [entry(p, opp.team_id, []) for p in opp.roster]
+    mine = [entry(p, me.team_id, news.get(p.playerId, [])) for p in me.roster]
+    fa_entries = [entry(p, None, news.get(p.playerId, []), f"{p.name} ({p.proTeam})") for p in fas]
+    values = streaming.player_values({e["id"]: e["per_game"] for e in mine + fa_entries + opp_players})
     out["plan"] = streaming.plan(
         days=days_between(max(today, first), last),
         slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR")),  # your starting spots
-        mine=[entry(p, me.team_id, news.get(p.playerId, [])) for p in me.roster],
+        mine=mine,
         opp_totals=streaming.totals(scores(opp_cats), opp_players),
         current=scores(my_cats),
-        free_agents=[entry(p, None, news.get(p.playerId, []), f"{p.name} ({p.proTeam})") for p in fas],
+        free_agents=fa_entries,
+        values=values,
         droppable=droppable,
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
     )
     out["plan"]["opp_current"] = scores(opp_cats)
     out["plan"]["opp_players"] = streaming.rows(opp_players)
+    for r in out["roster"]:  # overall value next to each name helps decide who is safe to drop
+        r["value"] = round(values.get(r["id"], 0), 1)
     return out
 
 
