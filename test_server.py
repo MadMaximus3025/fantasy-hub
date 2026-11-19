@@ -216,6 +216,8 @@ assert set(d["planner"]) == {"mine", "teams", "theirs"}
 jj_row = d["planner"]["mine"][0]
 assert [x is not None for x in jj_row["impact"]] == [s == "start" for s in jj_row["days"]], jj_row
 assert jj_row["impact_week"] == round(sum(x for x in jj_row["impact"] if x is not None), 1)
+assert all((c is None) == (x is None) for c, x in zip(jj_row["impact_cats"], jj_row["impact"]))
+assert all(abs(sum(c.values()) - x) < 0.1 for c, x in zip(jj_row["impact_cats"], jj_row["impact"]) if c)
 assert jj_row["opps"][0] == "BOS" and jj_row["opps"][1] is None and len(jj_row["top"]) == 2
 # a better line scores higher impact than a worse one against the same pool
 zs = __import__("streaming").zscorer({1: {"PTS": 20, "FGM": 8, "FGA": 16}, 2: {"PTS": 5, "FGM": 2, "FGA": 8}})

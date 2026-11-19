@@ -12,11 +12,11 @@
   :root {
     color-scheme: dark;
     /* color */
-    --bg:#070b16; --card:#111a2e; --card-2:#0d1526; --line:#22304b; --text:#eef2ff; --muted:#94a3c4; --text-2:#c8d2ea;
+    --bg:#000; --card:#0d0d10; --card-2:#09090b; --line:#26262c; --text:#f4f4f5; --muted:#a1a1aa; --text-2:#d4d4d8;
     --accent:#f59e0b; --on-accent:#111; --accent-line:#f59e0b; --win:#34d399; --loss:#fb7185;
     --win-bg:rgb(52 211 153 / .16); --loss-bg:rgb(251 113 133 / .10);
     --you:#60a5fa; --opp:#fb923c;
-    --surface-2:#1a2540; --row-hover:#16213a; --focus:#fff;
+    --surface-2:#18181c; --row-hover:#141418; --focus:#fff;
     /* type */
     --font:"Fira Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-num:"Fira Code", ui-monospace, monospace;
@@ -31,7 +31,7 @@
   @media (pointer: coarse) { :root { --tap:44px; } }
   @media (prefers-reduced-motion: reduce) { :root { --dur:0ms; } }
   * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; background:radial-gradient(1200px 600px at 10% -10%, #172554 0%, transparent 60%), radial-gradient(900px 500px at 110% 0%, #3b1d0e 0%, transparent 55%), var(--bg); color:var(--text); font:var(--fs-md)/var(--lh) var(--font); font-variant-numeric:tabular-nums; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font:var(--fs-md)/var(--lh) var(--font); font-variant-numeric:tabular-nums; }
   :focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
   header { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-3); flex-wrap:wrap; padding:var(--sp-4); margin-bottom:var(--sp-2); }
   header h1 { margin:0; font-size:var(--fs-lg); font-weight:700; }
@@ -77,6 +77,25 @@
   .chip.day[aria-pressed="true"] { background:var(--you); color:#0b1020; border-color:var(--you); }
   .guide th.today, .guide td.today { background:rgb(96 165 250 / .10); }
   .guide td.imp { font-weight:600; }
+  .panel-row > td { padding:var(--sp-3) var(--sp-2) var(--sp-4); background:var(--card-2); text-align:left !important; white-space:normal !important; }
+  .pp { border:1px solid var(--line); border-radius:var(--r-md); padding:var(--sp-3); background:var(--card); }
+  .pp-sum { margin:0 0 var(--sp-3); font-weight:700; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:var(--sp-2); margin-bottom:var(--sp-3); }
+  .tile { border:1px solid var(--line); border-radius:var(--r-sm); padding:var(--sp-2) var(--sp-3); background:var(--card-2); }
+  .tile.close { border:2px solid var(--accent); }
+  .t-top { display:flex; justify-content:space-between; font:700 var(--fs-xs) var(--font); letter-spacing:.5px; color:var(--text-2); }
+  .t-status { text-transform:uppercase; }
+  .tile.ahead .t-status { color:var(--win); } .tile.behind .t-status { color:var(--loss); } .tile.close .t-status { color:var(--accent); }
+  .t-val { font:800 var(--fs-xl) var(--font-num); margin:2px 0; }
+  .t-imp { font-size:var(--fs-sm); color:var(--muted); }
+  .t-imp .pos, .g-imp .pos { color:var(--win); } .t-imp .neg, .g-imp .neg { color:var(--loss); }
+  .games { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:var(--sp-2); }
+  .game { border:1px solid var(--line); border-radius:var(--r-sm); padding:var(--sp-2) var(--sp-3); }
+  .g-top { display:flex; justify-content:space-between; gap:var(--sp-2); font:700 var(--fs-xs) var(--font); text-transform:uppercase; letter-spacing:.5px; color:var(--text-2); }
+  .g-top span { color:var(--muted); }
+  .g-imp { margin:var(--sp-1) 0; font-size:var(--fs-sm); color:var(--muted); }
+  .g-imp b { font:800 var(--fs-lg) var(--font-num); }
+  .g-line { font-size:var(--fs-sm); color:var(--text-2); } .g-line b { font-family:var(--font-num); color:var(--text); }
   .guide td.imp.pos { color:var(--win); } .guide td.imp.neg { color:var(--loss); }
   .tg-row { display:flex; gap:var(--sp-3); align-items:flex-start; padding:var(--sp-2) 0; border-top:1px solid var(--line); }
   .tg-n { font:700 var(--fs-lg) var(--font-num); min-width:1.5em; }
@@ -429,8 +448,44 @@ function rosterGuideCard(d) {
     r.days.forEach((s, i) => { if (s === "start") for (const [k, v] of Object.entries(stats(r, i))) t[k] = (t[k] || 0) + v; });
     return show(t, st);
   };
-  const details = r => !planner.open.has(r.id) ? "" : CATS9.map(st => `<tr class="detail"><td></td><th scope="row">${st}</th>
-      ${r.days.map((s, i) => cell(r, s, i, st)).join("")}<td class="wk">${week(r, st)}</td></tr>`).join("");
+  // Player panel: his effect on each category of this matchup, then a card for each of his games
+  const proj = d.projection;
+  const catStatus = c => {
+    if (!proj) return "";
+    const a = proj.mine[c] || 0, b = proj.theirs[c] || 0;
+    const close = c.endsWith("%") ? Math.abs(a - b) < 0.01 : Math.abs(a - b) <= 0.05 * Math.max(a, b, 1);
+    return close || proj.result[c] === "T" ? "close" : proj.result[c] === "W" ? "ahead" : "behind";
+  };
+  const details = r => {
+    if (!planner.open.has(r.id)) return "";
+    const started = r.days.map((s, i) => s === "start" ? i : -1).filter(i => i >= 0);
+    const tot = {}, imp = {};
+    for (const i of started) {
+      for (const [k, v] of Object.entries(stats(r, i))) tot[k] = (tot[k] || 0) + v;
+      for (const [k, v] of Object.entries(r.impact_cats?.[i] || {})) imp[k] = (imp[k] || 0) + v;
+    }
+    const helps = CATS9.filter(c => catStatus(c) === "close" && (imp[c] || 0) > 0.2);
+    const costs = CATS9.filter(c => (imp[c] || 0) < -0.5).sort((a, b) => imp[a] - imp[b]).slice(0, 2);
+    const summary = started.length
+      ? `${helps.length ? `Helps your close categories: ${helps.join(", ")}` : "Doesn't move a close category"}${proj ? ` against ${esc(d.opponent)}` : ""}.${costs.length ? ` Costs you in ${costs.join(", ")}.` : ""}`
+      : "No starts this week.";
+    const extra = c => c === "FG%" ? ` · ${one(tot.FGA || 0)} FGA` : c === "FT%" ? ` · ${one(tot.FTA || 0)} FTA` : "";
+    const tiles = CATS9.map(c => `<div class="tile ${catStatus(c)}"><div class="t-top"><span>${c}</span><span class="t-status">${catStatus(c)}</span></div>
+        <div class="t-val">${!started.length ? "—" : c.endsWith("%") ? show(tot, c) : Math.round(tot[c] || 0)}</div>
+        <div class="t-imp"><span class="${(imp[c] || 0) >= 0 ? "pos" : "neg"}">${signed(imp[c] || 0)}</span> this week${extra(c)}</div></div>`).join("");
+    const games = r.days.map((s, i) => {
+      if (!r.opps?.[i]) return "";
+      const when = i < todayIdx ? "Final" : i === todayIdx ? "Today" : "To come";
+      const head = `<div class="g-top">${days[i].toLocaleDateString(undefined, { weekday: "short" })} ${days[i].getDate()} · ${esc(r.opps[i])}<span>${when}</span></div>`;
+      if (s !== "start") return `<div class="game">${head}<div class="g-imp muted">${{ bench: "On bench", out: "Out", dnp: "Started, no stats" }[s]}</div></div>`;
+      const line = stats(r, i), cats = Object.entries(r.impact_cats?.[i] || {}).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([c]) => c);
+      const v = r.impact?.[i] ?? 0;
+      return `<div class="game">${head}<div class="g-imp"><b class="${v >= 0 ? "pos" : "neg"}">${signed(v)}</b> ${r.actual?.[i] ? "" : "projected, "}most in ${cats.join(", ")}</div>
+        <div class="g-line">${["PTS", "REB", "AST"].map(k => `<b>${one(line[k] || 0)}</b> ${k}`).join(" ")}${r.actual?.[i] ? ` · ${Math.round(line.FGM || 0)}/${Math.round(line.FGA || 0)} FG` : ""}</div></div>`;
+    }).join("");
+    return `<tr class="panel-row"><td colspan="${days.length + 3}"><div class="pp">
+      <p class="pp-sum">${summary}</p><div class="tiles">${tiles}</div><div class="games">${games}</div></div></td></tr>`;
+  };
   const head = `<tr><th scope="col">Slot</th><th scope="col">Player</th>${days.map((dt, i) => `<th scope="col" class="${i === todayIdx ? "today" : ""}">${dt.toLocaleDateString(undefined, { weekday: "short" })}<small>${i < todayIdx ? "Final" : i === todayIdx ? "Today" : dt.getDate()}</small></th>`).join("")}<th scope="col">Week${c === "Impact" ? "" : " " + c}</th></tr>`;
   const body = shown.map(r => `<tr><td>${esc(r.slot || "–")}</td><th scope="row">
         <img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
@@ -446,7 +501,7 @@ function rosterGuideCard(d) {
         <select id="pl-stat" aria-label="Show">${["Impact", ...CATS9].map(x => opt(x, x, c)).join("")}</select>
       </div></div>
     <div class="h2h-scroll"><table><thead>${head}</thead><tbody>${body || `<tr><td colspan="${days.length + 3}" class="muted">No players on the selected teams.</td></tr>`}</tbody></table></div>
-    <p class="muted">${note} Opponent under each game. Click a name for all 9 stats. BE = bench, OUT = injured, DNP = started but no stats, · = no game.${planner.teams.size ? ` Filtered to ${[...planner.teams].join(", ")}.` : ""}</p></section>`;
+    <p class="muted">${note} Opponent under each game. Click a name for his category and game breakdown. BE = bench, OUT = injured, DNP = started but no stats, · = no game.${planner.teams.size ? ` Filtered to ${[...planner.teams].join(", ")}.` : ""}</p></section>`;
 }
 
 const CATS9 = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%"];

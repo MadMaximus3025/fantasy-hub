@@ -193,8 +193,9 @@ def add_impact(rows):
         return
     z = streaming.zscorer({i: r["avg"] for i, r in enumerate(rows)})
     for r in rows:
-        r["impact"] = [round(sum(z(r["actual"][i] or r["avg"]).values()), 1) if s == "start" else None
-                       for i, s in enumerate(r["days"])]
+        r["impact_cats"] = [{c: round(v, 2) for c, v in z(r["actual"][i] or r["avg"]).items()} if s == "start" else None
+                            for i, s in enumerate(r["days"])]  # per-category impact, for the player panel
+        r["impact"] = [round(sum(cats.values()), 1) if cats else None for cats in r["impact_cats"]]
         r["impact_week"] = round(sum(v for v in r["impact"] if v is not None), 1)
         r["top"] = [c for c, _ in sorted(z(r["avg"]).items(), key=lambda kv: -kv[1])[:2]]
 
