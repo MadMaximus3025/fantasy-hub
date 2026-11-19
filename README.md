@@ -31,4 +31,5 @@ Data is cached for 5 minutes; the Refresh button forces a reload.
 
 ```bash
 python test_server.py
+python test_streaming.py
 ```

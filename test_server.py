@@ -228,4 +228,29 @@ assert lu3[TODAY][1][1] == {"FGM": 6, "FGA": 14, "FTM": 3, "FTA": 4, "PTS": 16, 
 assert lu3[TODAY][1][2] is None and lu3[TODAY + timedelta(days=2)][1][1] is None  # no log for player 2; Friday is in the future
 assert server.planner_rows([f(1, "a", [2])], 1, MON, MON + timedelta(days=6), TODAY, lu3)[0]["actual"][2]["PTS"] == 16  # today's finished game shows
 server.fetch_gamelog = real_fetch
+
+# streaming endpoint: acquisitions left from ESPN, droppable ids validated, a free agent fills an open slot
+teams_raw = {"teams": [{"id": 1, "transactionCounter": {"matchupAcquisitionTotals": {"5": 2}}}]}
+acq_league = NS(settings=NS(matchup_acquisition_limit=4), espn_request=NS(league_get=lambda params: teams_raw))
+assert server.acquisitions_left(acq_league, 1, 5) == (4, 2, 2)
+assert server.acquisitions_left(NS(settings=NS(matchup_acquisition_limit=-1)), 1, 5) == (None, None, None)
+
+fa = f(50, "Free Guy", [4, 5, 6], PTS=25)  # Fri-Sun, after NOW
+scrub = f(51, "Scrub", [], slot="BE")
+me.roster.append(scrub)
+saved = server.connect, server.free_agents, server.day_lineups, server.acquisitions_left, server.datetime
+league.scoreboard = lambda week: [NS(home_team=me, away_team=opp, home_team_cats=cats, away_team_cats=None)]
+server.connect = lambda: (league, me)
+server.free_agents = lambda lg: [fa]
+server.day_lineups = lambda *a: {}
+server.acquisitions_left = lambda *a: (4, 2, 2)
+server.datetime = type("D", (datetime,), {"now": classmethod(lambda c, tz=None: NOW)})
+out = server.stream(drops="51,999,abc", plan=True)
+assert out["acquisitions"]["left"] == 2 and out["opponent"] == opp.team_name
+moves = out["plan"]["moves"]
+assert moves and moves[0]["add"]["name"] == "Free Guy (ATL)" and moves[0]["drop"]["name"] == "Scrub", moves
+assert server.stream(drops="999", plan=True)["plan"]["moves"] == []  # 999 isn't on your roster, so nothing is droppable
+assert "plan" not in server.stream()  # roster + acquisitions only until you ask for a plan
+server.connect, server.free_agents, server.day_lineups, server.acquisitions_left, server.datetime = saved
+me.roster.remove(scrub)
 print("ok")

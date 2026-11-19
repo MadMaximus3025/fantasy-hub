@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Annotated
 from urllib.request import Request, urlopen
 
+import streaming
 from espn_api.basketball import League
+from espn_api.basketball.player import Player
 from espn_api.basketball.constant import POSITION_MAP, PRO_TEAM_MAP, STATS_MAP
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -248,23 +250,25 @@ def player_news(league, roster):
         return dict(pool.map(one, roster))
 
 
+def matchup_sides(league, me, week):
+    """(opponent team or None on a bye, your category scores, theirs) for matchup `week`."""
+    matchup = next((m for m in league.scoreboard(week) if me in (m.home_team, m.away_team)), None)
+    if not matchup:
+        return None, None, None
+    home = matchup.home_team == me
+    opp = matchup.away_team if home else matchup.home_team
+    my_cats = matchup.home_team_cats if home else matchup.away_team_cats
+    opp_cats = matchup.away_team_cats if home else matchup.home_team_cats
+    return (opp if hasattr(opp, "roster") else None), my_cats, opp_cats
+
+
 def build_dashboard(league, me, now, news, week=None):
     today = now.date()
     current = league.currentMatchupPeriod
     week = week or current
     first, last = week_dates(league, week, today)
     left_from = max(today, first)  # games still to come in the selected week (none for a past week)
-    matchup = next(
-        (m for m in league.scoreboard(week) if me in (m.home_team, m.away_team)), None
-    )
-    opp, my_cats, opp_cats = None, None, None
-    if matchup:
-        home = matchup.home_team == me
-        opp = matchup.away_team if home else matchup.home_team
-        my_cats = matchup.home_team_cats if home else matchup.away_team_cats
-        opp_cats = matchup.away_team_cats if home else matchup.home_team_cats
-    if not hasattr(opp, "roster"):
-        opp = None  # bye week
+    opp, my_cats, opp_cats = matchup_sides(league, me, week)
 
     def player_row(p):
         return {
@@ -310,12 +314,8 @@ def build_dashboard(league, me, now, news, week=None):
     return data
 
 
-@app.get("/api/dashboard")
-def dashboard(refresh: bool = False, week: Annotated[int | None, Query(ge=1, le=30)] = None):
-    # Refresh may skip the cache only after 60s, so repeat clicks can't flood ESPN with your cookie
-    hit = _cache.get(week)
-    if hit and time.time() - hit["at"] < (60 if refresh else CACHE_SECONDS):
-        return hit["data"]
+def connect():
+    """Log in to the ESPN league and find your team; clear 5xx errors when that fails."""
     if not os.environ.get("LEAGUE_ID"):
         raise HTTPException(500, "LEAGUE_ID not set. Copy .env.example to .env and fill it in.")
     try:
@@ -327,7 +327,86 @@ def dashboard(refresh: bool = False, week: Annotated[int | None, Query(ge=1, le=
         )
     except Exception as e:
         raise HTTPException(502, f"ESPN refused the request ({e}). Check LEAGUE_ID, ESPN_S2 and SWID; the cookies expire.")
-    me = find_my_team(league, os.environ.get("TEAM_ID"), os.environ.get("SWID"))
+    return league, find_my_team(league, os.environ.get("TEAM_ID"), os.environ.get("SWID"))
+
+
+def game_lines(p, team_id, lineups, now, first, last):
+    """{date: season-average line} for p's games not started yet this week; with a team_id, only days p starts."""
+    if p.injuryStatus == "OUT":
+        return {}
+    avg = season_avg(p)
+    line = {k: avg.get(k, 0) for k in streaming.KEYS}
+    return {x["date"].date(): line for x in p.schedule.values()
+            if now < x["date"] and first <= x["date"].date() <= last
+            and (team_id is None or starting(p, team_id, x["date"].date(), lineups))}
+
+
+def free_agents(league, size=60):
+    """Most-owned free agents (not waivers: those can't be added the same day), with their NBA schedule attached."""
+    filters = {"players": {"filterStatus": {"value": ["FREEAGENT"]}, "limit": size,
+                           "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}}
+    data = league.espn_request.league_get(params={"view": "kona_player_info", "scoringPeriodId": league.scoringPeriodId},
+                                          headers={"x-fantasy-filter": json.dumps(filters)})
+    # espn_api's own free_agents() leaves out the schedule, which the planner needs
+    return [Player(p, league.year, league.pro_schedule) for p in data.get("players", [])]
+
+
+def acquisitions_left(league, team_id, week):
+    """(weekly limit, used this matchup, left); None where ESPN doesn't say or there is no limit."""
+    limit = league.settings.matchup_acquisition_limit
+    if not limit or limit < 0:
+        return None, None, None
+    try:
+        teams = league.espn_request.league_get(params={"view": "mTeam"}).get("teams", [])
+        counter = next(t for t in teams if t["id"] == team_id).get("transactionCounter", {})
+        used = counter.get("matchupAcquisitionTotals", {}).get(str(week), 0)
+    except Exception:
+        return limit, None, None
+    return limit, used, max(0, limit - used)
+
+
+@app.get("/api/stream")
+def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int | None, Query(ge=0, le=20)] = None,
+           plan: bool = False):
+    """Your roster and acquisitions left; with plan=true, the best week of free-agent pickups."""
+    league, me = connect()
+    now = datetime.now()
+    today, week = now.date(), league.currentMatchupPeriod
+    first, last = week_dates(league, week, today)
+    opp, my_cats, opp_cats = matchup_sides(league, me, week)
+    lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
+    limit, used, left = acquisitions_left(league, me.team_id, week)
+    out = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
+           "opponent": opp.team_name if opp else None,
+           "acquisitions": {"limit": limit, "used": used, "left": left},
+           "roster": [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
+                       "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
+                       "starts_left": len(game_lines(p, me.team_id, lineups, now, first, last))} for p in me.roster]}
+    if not (plan and opp):
+        return out
+    roster_ids = {p.playerId for p in me.roster}
+    droppable = {int(x) for x in drops.split(",") if x.strip().isdigit()} & roster_ids
+    out["plan"] = streaming.plan(
+        days=days_between(max(today, first), last),
+        slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR")),  # your starting spots
+        mine=[{"id": p.playerId, "name": p.name, "games": game_lines(p, me.team_id, lineups, now, first, last)} for p in me.roster],
+        opp_totals=streaming.totals(scores(opp_cats), [{"games": game_lines(p, opp.team_id, lineups, now, first, last)} for p in opp.roster]),
+        current=scores(my_cats),
+        free_agents=[{"id": p.playerId, "name": f"{p.name} ({p.proTeam})", "lines": game_lines(p, None, lineups, now, first, last)}
+                     for p in free_agents(league)],
+        droppable=droppable,
+        acquisitions=acq if acq is not None else (left or 0),
+    )
+    return out
+
+
+@app.get("/api/dashboard")
+def dashboard(refresh: bool = False, week: Annotated[int | None, Query(ge=1, le=30)] = None):
+    # Refresh may skip the cache only after 60s, so repeat clicks can't flood ESPN with your cookie
+    hit = _cache.get(week)
+    if hit and time.time() - hit["at"] < (60 if refresh else CACHE_SECONDS):
+        return hit["data"]
+    league, me = connect()
     data = build_dashboard(league, me, datetime.now(), player_news(league, me.roster), week)
     data["updated"] = datetime.now(timezone.utc).isoformat()  # when ESPN was last pulled; the browser shows it in local time
     _cache[week] = {"at": time.time(), "data": data}

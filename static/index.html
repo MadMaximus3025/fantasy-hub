@@ -46,6 +46,17 @@
   main.planner { grid-template-columns: 1fr 1.8fr; }
   @media (max-width: 900px) { main, main.planner { grid-template-columns:1fr; } }
   .nav-row { display:flex; gap:var(--sp-2); }
+  .nav-row { flex-wrap:wrap; justify-content:flex-end; }
+  .nav-row a.button:not([aria-current]) { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .drop { display:flex; align-items:center; gap:var(--sp-2); min-height:var(--tap); border-bottom:1px solid var(--line); cursor:pointer; }
+  .drop input { width:18px; height:18px; accent-color:var(--focus); flex:none; }
+  .drop small { display:block; color:var(--muted); }
+  .acq { display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-2); margin:var(--sp-3) 0; }
+  .acq input { width:4.5em; min-height:var(--tap); border:1px solid var(--line); border-radius:var(--r-sm); background:var(--card); color:var(--text); font:600 var(--fs-md) var(--font-num); padding:0 var(--sp-2); }
+  .moves { list-style:none; padding:0; margin:0; }
+  .moves li { border-bottom:1px solid var(--line); padding:var(--sp-2) 0; }
+  .moves .when { font-family:var(--font-num); color:var(--muted); margin-right:var(--sp-2); }
+  .moves .add { color:var(--win); font-weight:700; } .moves .dropped { color:var(--loss); font-weight:700; }
   a.button { display:inline-flex; align-items:center; min-height:var(--tap); padding:0 var(--sp-3); border-radius:var(--r-pill); background:var(--accent); color:var(--on-accent); font:600 var(--fs-sm) var(--font); text-decoration:none; }
   .bar-row { display:grid; grid-template-columns: 4.5em 1fr auto; align-items:center; gap:var(--sp-2); padding:var(--sp-1) 0; font-size:var(--fs-sm); }
   .bar-day { color:var(--muted); font-weight:600; }
@@ -148,7 +159,7 @@
 <header>
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
-    <div class="nav-row"><a id="nav" class="button" href="#planner">Weekly planner</a><button id="refresh" class="ghost">Refresh</button></div>
+    <nav class="nav-row" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#streaming">Streaming</a><button id="refresh" class="ghost">Refresh</button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -201,6 +212,68 @@ const weekDays = d => {
   const start = new Date(d.week.start + "T00:00");
   return d.slate.mine.map((_, i) => new Date(start.getTime() + i * 864e5));
 };
+
+// ---- Streaming page (#streaming) ----
+const stream = { data: null, plan: null, acq: null, loading: false, error: null };
+let drops;  // player ids you're willing to drop; remembered in this browser only
+try { drops = new Set(JSON.parse(localStorage.getItem("drops") || "[]")); } catch { drops = new Set(); }
+
+async function loadStream(plan = false) {
+  stream.loading = true;
+  if (location.hash === "#streaming" && lastData) render(lastData);
+  try {
+    const q = new URLSearchParams({ drops: [...drops].join(",") });
+    if (stream.acq !== null && stream.acq !== "") q.set("acq", stream.acq);
+    if (plan) q.set("plan", "true");
+    const r = await fetch("/api/stream?" + q);
+    const j = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));
+    if (!r.ok) throw new Error(j.detail);
+    stream.data = j;
+    if (plan) stream.plan = j.plan || null;
+    stream.error = null;
+  } catch (e) {
+    stream.error = e.message;
+  }
+  stream.loading = false;
+  if (location.hash === "#streaming" && lastData) render(lastData);
+}
+
+function streamView() {
+  if (!stream.data) {
+    if (!stream.loading && !stream.error) loadStream();
+    return `<section class="card">${stream.error ? `<p class="error">Could not load: ${esc(stream.error)}</p>` : '<p class="muted">Loading roster…</p>'}</section>`;
+  }
+  const s = stream.data, a = s.acquisitions;
+  const acqNote = a.left != null ? `ESPN: ${a.left} left this matchup (${a.used} of ${a.limit} used)`
+    : a.limit == null ? "ESPN shows no weekly limit; set how many adds to plan" : `Limit ${a.limit} a week; ESPN didn't say how many you've used`;
+  const roster = s.roster.map(p => `<label class="drop"><input type="checkbox" data-drop="${p.id}" ${drops.has(p.id) ? "checked" : ""}>
+      <span><b>${esc(p.name)}</b>${p.injury ? ` <span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}
+      <small>${esc(p.slot || "–")} · ${esc(p.team)} · ${p.starts_left} starts left this week</small></span></label>`).join("");
+  const setup = `<section class="card"><h2>Players I'm willing to drop</h2>${roster}
+    <div class="acq"><label for="acq"><b>Adds to use</b></label>
+      <input id="acq" type="number" inputmode="numeric" min="0" max="20" value="${esc(stream.acq ?? a.left ?? "")}">
+      <span class="muted">${acqNote}</span></div>
+    <button id="plan-btn" ${stream.loading ? "disabled" : ""}>${stream.loading ? "Planning…" : "Plan my pickups"}</button>
+    ${stream.error ? `<p class="error">${esc(stream.error)}</p>` : ""}</section>`;
+  return `<div class="stack">${setup}</div><div class="stack">${planCard(s)}</div>`;
+}
+
+function planCard(s) {
+  const head = `<h2>Pickup plan · week ${s.week.number}${s.opponent ? ` vs ${esc(s.opponent)}` : ""}</h2>`;
+  if (!s.opponent) return `<section class="card">${head}<p class="muted">Bye week: no matchup to plan for.</p></section>`;
+  const p = stream.plan;
+  if (!p) return `<section class="card">${head}<p class="muted">Tick the players you'd drop, check the number of adds, then press <b>Plan my pickups</b>.
+    The plan tries every top free agent on each of his game days with each player you'd drop, and keeps the moves that win the most categories.</p></section>`;
+  const moves = p.moves.length ? `<ol class="moves">${p.moves.map(m => `<li><span class="when">${gameDay(m.day)}</span>
+      <span class="add">Add ${esc(m.add.name)}</span> · <span class="dropped">drop ${esc(m.drop.name)}</span>
+      <small class="muted">counts ${m.games.length} game${m.games.length === 1 ? "" : "s"} (${m.games.map(gameDay).join(", ")})</small></li>`).join("")}</ol>`
+    : '<p class="muted">No pickup improves your projected result with these drops and adds. Try allowing more drops.</p>';
+  const rows = CATS9.map(c => `<tr><td>${c}</td><td>${fmt(c, p.before.mine[c])}</td><td class="${p.after.result[c]}">${fmt(c, p.after.mine[c])}</td><td>${fmt(c, p.theirs[c])}</td></tr>`).join("");
+  return `<section class="card">${head}
+    <p><b>Projected ${p.before.record} → ${p.after.record}</b> (W-L-T)</p>${moves}
+    <table><thead><tr><th>Cat</th><th>Now</th><th>With plan</th><th>${esc(s.opponent)}</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">Free-agent stats are season averages; a pickup only counts on days you have an open starting spot. Adds happen on a player's game day, before tip-off.</p></section>`;
+}
 
 // ---- Weekly planner page (#planner) ----
 const planner = { roster: "mine", stat: "PTS", teams: new Set(), open: new Set() };
@@ -348,17 +421,17 @@ let lastData = null;
 
 function render(d) {
   lastData = d;
-  const onPlanner = location.hash === "#planner";
-  $("#app").classList.toggle("planner", onPlanner);
-  $("#nav").textContent = onPlanner ? "Dashboard" : "Weekly planner";
-  $("#nav").href = onPlanner ? "#" : "#planner";
-  $("#app").innerHTML = onPlanner ? plannerView(d)
+  const page = ["#planner", "#streaming"].includes(location.hash) ? location.hash : "#";
+  $("#app").classList.toggle("planner", page !== "#");
+  document.querySelectorAll(".nav-row a").forEach(a => a.getAttribute("href") === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
+  $("#app").innerHTML = page === "#planner" ? plannerView(d) : page === "#streaming" ? streamView()
     : rosterCard(d) + `<div class="stack">${slateCard(d)}${currentCard(d)}${projectionCard(d)}</div>`;
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
 
 async function load(refresh = false) {
   closeH2H();
+  if (refresh) Object.assign(stream, { data: null, plan: null });  // streaming page refetches too
   document.querySelectorAll(".picker button, .picker select").forEach(x => x.disabled = true);
   try {
     const q = new URLSearchParams();
@@ -439,6 +512,8 @@ $("#app").addEventListener("click", e => {
   $("#news-" + b.dataset.news).classList.toggle("open", open);
 });
 $("#refresh").onclick = () => load(true);
+$("#app").addEventListener("input", e => { if (e.target.id === "acq") stream.acq = e.target.value; });
+$("#app").addEventListener("click", e => { if (e.target.closest("#plan-btn")) loadStream(true); });
 // Week picker: every card reloads for the chosen matchup week
 $("#app").addEventListener("click", e => {
   const b = e.target.closest("[data-week]");
@@ -448,6 +523,11 @@ $("#app").addEventListener("change", e => {
   if (e.target.id === "week") { week = Number(e.target.value); load(); }
   if (e.target.id === "pl-roster") { planner.roster = e.target.value; render(lastData); }
   if (e.target.id === "pl-stat") { planner.stat = e.target.value; render(lastData); }
+  if (e.target.dataset.drop) {
+    const id = Number(e.target.dataset.drop);
+    e.target.checked ? drops.add(id) : drops.delete(id);
+    try { localStorage.setItem("drops", JSON.stringify([...drops])); } catch {}
+  }
 });
 // Games-per-team chips filter the roster guide
 $("#app").addEventListener("click", e => {
