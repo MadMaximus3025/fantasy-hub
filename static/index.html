@@ -303,6 +303,19 @@ function slateCard(d) {
     <p class="legend"><span>Top: you</span>${d.opponent ? "<span>Bottom: opponent</span>" : ""}</p></section>`;
 }
 
+// Live category scores from ESPN for the selected week, with who leads each one
+function currentCard(d) {
+  if (!d.projection || d.week.number !== d.week.current) return "";  // past weeks: the projection card shows the final
+  const cur = d.projection.current, res = cur.result;
+  const count = r => Object.values(res).filter(x => x === r).length;
+  const leader = { W: "You", L: esc(d.opponent), T: "Tied" };
+  const rows = d.projection.cats.map(c => `<tr><td>${c}</td><td class="${res[c] === "W" ? "W" : ""}">${fmt(c, cur.mine[c] || 0)}</td>
+      <td class="${res[c] === "L" ? "L" : ""}">${fmt(c, cur.theirs[c] || 0)}</td><td class="${res[c]}">${leader[res[c]]}</td></tr>`).join("");
+  return `<section class="card"><h2>Current 9-cat score · ${count("W")}-${count("L")}-${count("T")}</h2>
+    <table><thead><tr><th>Cat</th><th>You</th><th>${esc(d.opponent)}</th><th>Leading</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted">Live totals from ESPN for this matchup. TO: fewer wins.</p></section>`;
+}
+
 function projectionCard(d) {
   if (!d.projection) return "";
   const p = d.projection;
@@ -340,7 +353,7 @@ function render(d) {
   $("#nav").textContent = onPlanner ? "Dashboard" : "Weekly planner";
   $("#nav").href = onPlanner ? "#" : "#planner";
   $("#app").innerHTML = onPlanner ? plannerView(d)
-    : rosterCard(d) + `<div class="stack">${slateCard(d)}${projectionCard(d)}</div>`;
+    : rosterCard(d) + `<div class="stack">${slateCard(d)}${currentCard(d)}${projectionCard(d)}</div>`;
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
 

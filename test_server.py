@@ -159,6 +159,9 @@ pro2 = {1: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}, {"dat
         2: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}]}}
 assert server.team_games(NS(pro_schedule=pro2), MON, sun) == {"ATL": 1, "BOS": 1}  # Nov 30 is outside the week
 assert set(d["planner"]) == {"mine", "teams", "theirs"}
+# live category leaders from ESPN's current scores (cats fixture: you PTS 50 / REB 20, opponent nothing yet)
+live = d["projection"]["current"]["result"]
+assert live["PTS"] == "W" and live["REB"] == "W" and live["AST"] == "T", live
 # actual stats only for past days a player started and played; None elsewhere
 lu2 = {TUE: {1: {1: {"PTS": 31}}}, THU: {1: {1: {"PTS": 99}}}}  # Thursday is not past yet
 assert server.planner_rows([a], 1, MON, sun, TODAY, lu2)[0]["actual"] == [None, {"PTS": 31}, None, None, None, None, None]

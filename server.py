@@ -302,7 +302,8 @@ def build_dashboard(league, me, now, news, week=None):
             "mine": mine_proj,
             "theirs": opp_proj,
             "result": compare(mine_proj, opp_proj),
-            "current": {"mine": scores(my_cats), "theirs": scores(opp_cats)},
+            "current": {"mine": scores(my_cats), "theirs": scores(opp_cats),
+                        "result": compare(scores(my_cats), scores(opp_cats))},  # who leads each category right now
             "players": {"mine": contributions(me.roster, now, first, last, me.team_id, lineups),
                         "theirs": contributions(opp.roster, now, first, last, opp.team_id, lineups)},
         }
