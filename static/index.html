@@ -103,6 +103,7 @@
   .news.open { display:block; }
   .news p { margin:var(--sp-1) 0; color:var(--text-2); }
   .news b { color:var(--text); }
+  .news .tag { font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--loss); }
   .games { list-style:none; margin:var(--sp-1) 0; padding:0; display:flex; flex-wrap:wrap; gap:var(--sp-1); }
   .games li { font-size:var(--fs-sm); color:var(--text-2); }
   .chip { background:transparent; color:var(--text-2); border:1px solid var(--line); border-radius:var(--r-sm); padding:0 var(--sp-2); font-weight:500; }
@@ -192,7 +193,7 @@ function rosterCard(d) {
         <ul class="games" aria-label="Games left this matchup">${p.upcoming.length
           ? p.upcoming.map(g => `<li><button class="chip" data-h2h="${p.id}" data-opp="${esc(g.opp)}" data-name="${esc(p.name)}" aria-haspopup="dialog" aria-expanded="false"><span>${gameDay(g.date)}</span> vs ${esc(g.opp)}</button></li>`).join("")
           : "<li>No games left this matchup</li>"}</ul>
-        ${p.news.map(n => `<p><b>${esc(n.headline)}</b><br>${esc(n.tldr)}</p>`).join("")}
+        ${p.news.map(n => `<p><span class="tag">${esc(n.kind)}</span> <b>${esc(n.headline)}</b><br>${esc(n.tldr)}</p>`).join("")}
       </div>
     </div>`).join("");
   return `<section class="card"><h2>Roster · ${d.roster.length} players</h2>${rows}</section>`;

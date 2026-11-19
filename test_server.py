@@ -108,7 +108,26 @@ def fake_news(pid):
         raise OSError("timeout")
     return {"news": {"feed": [{"headline": "<b>Hot</b>", "story": "Scored 30. Then more."}] * 5}}
 nl = NS(espn_request=NS(get_player_news=fake_news))
-assert server.player_news(nl, me.roster) == {1: [{"headline": "Hot", "tldr": "Scored 30."}] * 3, 2: [], 3: [{"headline": "Hot", "tldr": "Scored 30."}] * 3}
+assert server.player_news(nl, me.roster) == {1: [], 2: [], 3: []}  # stat-line news is dropped
+
+# only injury / playing-time news is kept, labeled; at most 3
+def feed(pid):
+    return {"news": {"feed": [
+        {"headline": "Johnson scores 30", "story": "He went 12-for-20 in a win."},
+        {"headline": "Johnson questionable Friday", "story": "Johnson is <b>questionable</b> with a sprained ankle."},
+        {"headline": "Johnson moved to the bench", "story": "Johnson will come off the bench as the team starts Smith."},
+        {"headline": "Johnson notches double-double", "story": "He had 14 points and 11 boards. He has started all season."},
+        {"headline": "Johnson out", "story": "Johnson will miss Saturday's game with knee soreness."},
+        {"headline": "Johnson plays 38 minutes", "story": "Johnson saw 38 minutes as his role expands."},
+    ]}}
+kept = server.player_news(NS(espn_request=NS(get_player_news=feed)), [me.roster[0]])[1]
+assert [(n["kind"], n["headline"]) for n in kept] == [("Injury", "Johnson questionable Friday"), ("Playing time", "Johnson moved to the bench"),
+                                                     ("Injury", "Johnson out")], kept
+assert server.news_kind("Scored 30 in a win. Fourth straight game with 20.") is None
+assert server.news_kind("Johnson had 20 points and 9 rebounds in 32 minutes Tuesday.") is None  # minutes in a recap isn't a role change
+assert server.news_kind("Johnson is expected to see more minutes with Young sidelined") == "Injury"  # teammate injury still matters
+assert server.news_kind("Coach says Johnson will see more minutes going forward") == "Playing time"
+assert server.news_kind("Will be held out to rest on the second night of a back-to-back") == "Injury"
 
 # refresh: served from cache when under 60s old, refetched after
 import time as _t

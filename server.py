@@ -269,11 +269,35 @@ def upcoming_games(player, today, end):
     return [{"date": g["date"].date().isoformat(), "opp": g["team"]} for g in games]
 
 
+# shortcut: keyword matching, so unusual wording can be missed or mislabeled; switch to an LLM classifier if that bites
+INJURY_WORDS = re.compile(
+    r"\b(injur\w*|questionable|doubtful|probable|day-to-day|game-time decision|sidelined|ruled out|will miss|"
+    r"(miss|missed|misses|missing) (\w+ )?(game|games|time|action|contest)|out (for|with|indefinitely|tonight|again)|"
+    r"surgery|sprain\w*|strain\w*|sore\w*|illness|concussion|protocol|fracture\w*|torn|tear|"
+    r"(ankle|knee|hamstring|groin|foot|wrist|shoulder|calf|hip|achilles|back) (injury|issue|soreness|tightness|contusion)|"
+    r"return(s|ed|ing)? (to action|from)|rest(ed|ing)?|load management|minutes restriction|restriction)\b", re.I)
+ROLE_WORDS = re.compile(
+    r"\b(starting lineup|start(s|ed|ing)? (in place|for|at|in)|(will|to) start|first start|moved to the bench|"
+    r"off the bench|(to|from|on) the bench|benched|depth chart|playing time|sixth man|sixth-man|"
+    r"(more|fewer|increased|reduced|limited|extended|expanded|bigger|smaller|larger|heavier|lighter) (minutes|role|workload)|"
+    r"(starting|reserve|bench) role|role (expand|grow|shrink|increas|decreas|chang)\w*|minutes (restriction|limit|cap|load)|"
+    r"(out of|into|in) the rotation|rotation (spot|role|change)|demot\w*|promot\w*|DNP|did not play|coach'?s decision)\b", re.I)
+
+
+def news_kind(text):
+    """'Injury' or 'Playing time' when a news item matters for whether or how much a player plays; None otherwise."""
+    return "Injury" if INJURY_WORDS.search(text) else "Playing time" if ROLE_WORDS.search(text) else None
+
+
 def player_news(league, roster):
+    """Latest 3 news items per player that are about injuries or playing time (game recaps and stat lines left out)."""
     def one(p):
         try:
             feed = league.espn_request.get_player_news(p.playerId).get("news", {}).get("feed", [])
-            return p.playerId, [{"headline": tldr(n.get("headline")), "tldr": tldr(n.get("story"))} for n in feed[:3]]
+            items = [{"headline": tldr(n.get("headline")), "tldr": tldr(n.get("story")),
+                      "kind": news_kind(tldr(n.get("headline"), 10_000) + " " + tldr(n.get("story"), 10_000))} for n in feed]
+            # whole story is classified, not just its first sentence, which is all the page shows
+            return p.playerId, [n for n in items if n["kind"]][:3]
         except Exception:
             return p.playerId, []  # news is nice-to-have; never break the dashboard over it
 
