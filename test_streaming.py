@@ -55,17 +55,21 @@ assert st.plan(D, 2, me, opp, cur, fa, droppable={2}, acquisitions=6.0)["moves"]
 # overall value: a clearly better player is an upgrade even if no category flips this week
 D2 = D[:1]
 tied = {c: 0 for c in st.CATS}
-up = st.plan(D2, 1, [{"id": 1, "name": "Weak", "games": {}}], tied, {}, [{"id": 5, "name": "Strong", "lines": {}}],
-             droppable={1}, acquisitions=2, values={1: -2.0, 5: 1.5})
-assert [(x["kind"], x["add"]["name"], x["value"]) for x in up["moves"]] == [("upgrade", "Strong", 3.5)], up["moves"]
-# ...but a small gain doesn't use an add
-assert st.plan(D2, 1, [{"id": 1, "name": "Weak", "games": {}}], tied, {}, [{"id": 5, "name": "Strong", "lines": {}}],
-               droppable={1}, acquisitions=2, values={1: 0.0, 5: 0.3})["moves"] == []
+# upgrades count games this week + next week: no games left now but 4 next week still helps
+weak, strong = [{"id": 1, "name": "Weak", "games": {}}], [{"id": 5, "name": "Strong", "lines": {}}]
+up = st.plan(D2, 1, weak, tied, {}, strong, droppable={1}, acquisitions=2, values={1: -0.5, 5: 1.0}, next_games={1: 4, 5: 4})
+assert [(x["kind"], x["add"]["name"], x["value"], x["next_games"]) for x in up["moves"]] == [("upgrade", "Strong", 6.0, 4)], up["moves"]
+# no games this week or next: can't help, never suggested however good
+assert st.plan(D2, 1, weak, tied, {}, strong, droppable={1}, acquisitions=2, values={1: -2.0, 5: 3.0}, next_games={1: 4})["moves"] == []
+# a small two-week gain doesn't use an add
+assert st.plan(D2, 1, weak, tied, {}, strong, droppable={1}, acquisitions=2, values={1: 0.0, 5: 0.3}, next_games={1: 4, 5: 4})["moves"] == []
+# fewer games next week can outweigh better per-game value: 1.0 x 1 game < 0.4 x 4 games
+assert st.plan(D2, 1, weak, tied, {}, strong, droppable={1}, acquisitions=2, values={1: 0.4, 5: 1.0}, next_games={1: 4, 5: 1})["moves"] == []
 # a stream that would drop a much better player isn't made, even if it wins a category this week
 star = [{"id": 1, "name": "Star", "games": {}}]
 sfa = [{"id": 5, "name": "Streamer", "lines": {D[1]: big}}]
-assert st.plan(D, 1, star, opp, cur, sfa, droppable={1}, acquisitions=2, values={1: 4.0, 5: 0.0})["moves"] == []
-assert st.plan(D, 1, star, opp, cur, sfa, droppable={1}, acquisitions=2, values={1: 0.5, 5: 0.0})["moves"][0]["kind"] == "stream"
+assert st.plan(D, 1, star, opp, cur, sfa, droppable={1}, acquisitions=2, values={1: 4.0, 5: 0.0}, next_games={1: 4})["moves"] == []
+assert st.plan(D, 1, star, opp, cur, sfa, droppable={1}, acquisitions=2, values={1: 0.5, 5: 0.0}, next_games={1: 4})["moves"][0]["kind"] == "stream"
 
 # player values: better per-game lines score higher; efficient shooting counts; turnovers hurt
 lines = {1: line(PTS=25, REB=8, AST=6, STL=1, BLK=1, **{"3PM": 3}, TO=2, FGM=9, FGA=17, FTM=4, FTA=5),

@@ -10,9 +10,10 @@ CATS = ["FG%", "FT%", "3PM", "PTS", "REB", "AST", "STL", "BLK", "TO"]
 
 
 # shortcut: hand-picked weights for trading this week's categories against season-long value; tune if moves feel off
-VALUE_WEIGHT = 0.5      # one category won this week counts like 2 points of per-game value
-STREAM_TOLERANCE = 1.0  # a stream may drop a player worth up to this much more per game, not more
-UPGRADE_MIN = 0.5       # a move that wins nothing this week must add at least this much per-game value
+# values below are per-game value x games over the rest of this week and next week's matchup
+VALUE_WEIGHT = 0.15     # one category won this week counts like ~7 points of two-week value
+STREAM_TOLERANCE = 4.0  # a stream may cost up to this much two-week value (about 1 per game over ~4 games)
+UPGRADE_MIN = 2.0       # a move that wins nothing this week must add at least this much two-week value
 
 
 def player_values(lines):
@@ -87,20 +88,21 @@ def record(res):
     return f'{sum(r == "W" for r in res.values())}-{sum(r == "L" for r in res.values())}-{sum(r == "T" for r in res.values())}'
 
 
-def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None):
+def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None):
     """Greedy week plan.
 
     days: remaining dates in order. slots: starting spots per day.
     mine: [{"id", "name", "games": {date: line}}] - games that count for you (starter, not OUT, not started yet).
     free_agents: [{"id", "name", "lines": {date: line}}] - every remaining game of each free agent.
     droppable: ids you are willing to drop. acquisitions: the most adds you may still make this week.
-    values: {id: per-game season value} from player_values(), for judging the roster beyond this week.
+    values: {id: per-game season value} from player_values(). next_games: {id: games in next week's matchup}.
+    A move's value gain = pickup's value x his games (counted this week + next week) - the same for the dropped player.
     Each step tries every add (today or on one of the free agent's game days) with every allowed drop, and makes
-    the best move of two kinds: a stream (wins more categories this week without dropping a clearly better
-    player) or an upgrade (a clearly better player overall, without losing a category this week). Moves rank by
+    the best move of two kinds: a stream (wins more categories this week without costing much two-week value)
+    or an upgrade (adds clear value this week and/or next week, without losing a category this week). Moves rank by
     categories gained + VALUE_WEIGHT x value gained. Stops when no move qualifies or adds run out.
     """
-    values = values or {}
+    values, next_games = values or {}, next_games or {}
     roster = [dict(p, games=dict(p["games"])) for p in mine]
     used = {d: sum(d in p["games"] for p in roster) for d in days}
     added_on = {}  # free agents you add can be dropped again later (streaming), but only after the day they were added
@@ -146,7 +148,12 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                     new_roster, new_used, games = apply(fa, drop, day)
                     s = score(totals(current, new_roster), opp_totals)
                     dw = s[0] - best[0]  # categories gained this week (ties count half)
-                    dv = values.get(fa["id"], 0) - values.get(drop["id"], 0)  # per-game value gained for the season
+                    # value gained over the rest of this week and next week: per-game value x games each player plays
+                    add_games = len(games) + next_games.get(fa["id"], 0)
+                    drop_games = sum(d >= day for d in drop["games"]) + next_games.get(drop["id"], 0)
+                    if not add_games:
+                        continue  # can't help this week or next
+                    dv = values.get(fa["id"], 0) * add_games - values.get(drop["id"], 0) * drop_games
                     is_stream = dw > 0 and games and dv > -STREAM_TOLERANCE
                     is_upgrade = dw >= 0 and dv >= UPGRADE_MIN
                     if not (is_stream or is_upgrade):
@@ -162,7 +169,8 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         dropped.add(drop["id"])
         moves.append({"day": day, "add": {"id": fa["id"], "name": fa["name"]}, "drop": {"id": drop["id"], "name": drop["name"]},
                       "games": sorted(games), "why": fa.get("note", ""),
-                      "kind": "stream" if dw > 0 else "upgrade", "week": dw, "value": round(dv, 2)})
+                      "kind": "stream" if dw > 0 else "upgrade", "week": dw, "value": round(dv, 2),
+                      "next_games": next_games.get(fa["id"], 0)})
     end = totals(current, roster)
     tags = {m["add"]["id"]: f"added {m['day'].strftime('%a %m/%d')}" for m in moves}
     for m in moves:  # a streamer added and later dropped shows both

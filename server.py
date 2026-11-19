@@ -573,6 +573,10 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     mine = [entry(p, me.team_id, news.get(p.playerId, [])) for p in me.roster]
     fa_entries = [entry(p, None, news.get(p.playerId, []), f"{p.name} ({p.proTeam})") for p in fas]
     values = streaming.player_values({e["id"]: e["per_game"] for e in mine + fa_entries + opp_players})
+    next_first, next_last = week_dates(league, week + 1, today)
+    # games in next week's matchup; nothing for anyone OUT now, since his return date is unknown
+    next_games = {p.playerId: 0 if p.injuryStatus == "OUT" else
+                  sum(next_first <= x["date"].date() <= next_last for x in p.schedule.values()) for p in me.roster + fas}
     out["plan"] = streaming.plan(
         days=days_between(max(today, first), last),
         slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR")),  # your starting spots
@@ -581,6 +585,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         current=scores(my_cats),
         free_agents=fa_entries,
         values=values,
+        next_games=next_games,
         droppable=droppable,
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
     )
