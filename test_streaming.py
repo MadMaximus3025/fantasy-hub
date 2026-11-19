@@ -32,6 +32,12 @@ assert st.plan(D, 2, me, opp, cur, fa, droppable={2}, acquisitions=0)["moves"] =
 full = [{"id": 1, "name": "Starter", "games": {d: big for d in D}}, {"id": 2, "name": "Bench", "games": {}}]
 assert st.plan(D, 1, full, opp, cur, fa, droppable={2}, acquisitions=3)["moves"] == []
 
+# daily limit: with 1 add a day and today's add already used, nothing is added today
+cap_fa = [{"id": 20, "name": "Today Guy", "lines": {D[0]: big}}, {"id": 21, "name": "Fri Guy", "lines": {D[1]: big}},
+          {"id": 22, "name": "Fri Guy 2", "lines": {D[1]: big}}]
+p3 = st.plan(D, 3, me, opp, cur, cap_fa, droppable={1, 2}, acquisitions=5, day_caps={D[0]: 0, D[1]: 1, D[2]: 1, D[3]: 1})
+assert [m["day"] for m in p3["moves"]] == [D[1]], p3["moves"]  # today blocked; only one of the two Friday guys
+
 # TO: fewer wins
 assert st.result({**opp, "TO": 10}, opp)["TO"] == "W"
 # each player is dropped at most once, and moves come back in day order

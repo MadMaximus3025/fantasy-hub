@@ -244,7 +244,7 @@ function streamView() {
     return `<section class="card">${stream.error ? `<p class="error">Could not load: ${esc(stream.error)}</p>` : '<p class="muted">Loading roster…</p>'}</section>`;
   }
   const s = stream.data, a = s.acquisitions;
-  const acqNote = a.left != null ? `ESPN: ${a.left} left this matchup (${a.used} of ${a.limit} used)`
+  const acqNote = a.left != null ? `ESPN: ${a.left} left this matchup (${a.used} of ${a.limit} used)${a.daily_limit ? ` · max ${a.daily_limit} a day` : ""}`
     : a.limit == null ? "ESPN shows no weekly limit; set how many adds to plan" : `Limit ${a.limit} a week; ESPN didn't say how many you've used`;
   const roster = s.roster.map(p => `<label class="drop"><input type="checkbox" data-drop="${p.id}" ${drops.has(p.id) ? "checked" : ""}>
       <span><b>${esc(p.name)}</b>${p.injury ? ` <span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}
@@ -264,7 +264,7 @@ function acqDetails(a, w) {
   const list = xs => xs.length ? `<ul>${xs.map(m => `<li>${esc(m.date)} · ${esc(m.action)} · ${esc(m.player)}</li>`).join("")}</ul>` : " none";
   const c = a.counter;
   return `<details class="breakdown"><summary>How adds left was counted</summary><ul class="muted">
-    <li>Weekly limit from your league settings: <b>${a.limit ?? "not set"}</b></li>
+    <li>Limit from your league settings: <b>${a.daily_limit ? `${a.daily_limit} per day × ${a.limit / a.daily_limit} days = ${a.limit}` : a.limit ?? "not set"}</b></li>
     <li>Matchup days: ${esc(w.start)} to ${esc(w.end)}</li>
     <li>Your adds in those days (from the league activity log):${list(a.counted)}</li>
     <li>Your latest adds, any date:${list(a.recent)}</li>

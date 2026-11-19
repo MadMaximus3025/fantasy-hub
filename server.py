@@ -355,7 +355,10 @@ def acquisitions_left(league, me, first, last, week):
     """Weekly add limit, adds used this matchup and adds left, plus what they were read from so the page can show it.
     Used = your free-agent and waiver adds dated inside the matchup, from ESPN's league activity log."""
     limit = league.settings.matchup_acquisition_limit
-    info = {"limit": limit if limit and limit > 0 else None, "used": None, "left": None,
+    limit = limit if limit and limit > 0 else None
+    # ESPN's "limit per scoring period" flag: the limit is per day (1 scoring period = 1 day), not per matchup
+    daily = limit if limit and getattr(league.settings, "matchup_limit_per_scoring_period", False) else None
+    info = {"limit": daily * len(days_between(first, last)) if daily else limit, "daily_limit": daily, "used": None, "left": None,
             "counted": [], "recent": [], "counter": None, "errors": []}
     try:
         # shortcut: reads the league's 100 latest moves; a very busy league could push older adds this week out
@@ -411,6 +414,9 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
                      for p in free_agents(league)],
         droppable=droppable,
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
+        # daily limit minus adds already made that day (today's count matters; past days aren't planned)
+        day_caps={d: max(0, acquisitions["daily_limit"] - sum(c["date"] == d.isoformat() for c in acquisitions["counted"]))
+                  for d in days_between(max(today, first), last)} if acquisitions["daily_limit"] else None,
     )
     out["plan"]["opp_current"] = scores(opp_cats)
     out["plan"]["opp_players"] = streaming.rows(opp_players)
