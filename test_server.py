@@ -208,5 +208,21 @@ for args, code in (((7, "XXX"), 400), ((999, "NYK"), 404)):
         server.vs_team(*args); assert False
     except HTTPException as e:
         assert e.status_code == code
+# ESPN unreachable even for this season -> 502 with the reason, not an empty "no games"
+server.fetch_gamelog = lambda pid, season: (_ for _ in ()).throw(OSError("HTTP Error 403: Forbidden"))
+try:
+    server.vs_team(7, "NYK"); assert False
+except HTTPException as e:
+    assert e.status_code == 502 and "403" in e.detail, e.detail
+
+# actual stats from the game log fill the daily lineups up to today (not future days)
+log = [{"date": "2026-11-18", "opp": "OKC", "stats": {"FG%": "6-14", "FT%": "3-4", "3PM": "1", "PTS": "16", "REB": "9", "AST": "7", "STL": "1", "BLK": "0", "TO": "2"}},
+       {"date": "2026-11-20", "opp": "MIA", "stats": {"FG%": "9-9", "FT%": "0-0", "3PM": "0", "PTS": "18", "REB": "1", "AST": "1", "STL": "0", "BLK": "0", "TO": "0"}}]
+server.fetch_gamelog = lambda pid, season: log if pid == 1 else []
+lu3 = {TODAY: {1: {1: None, 2: None}}, TODAY + timedelta(days=2): {1: {1: None}}}
+server.fill_actuals(lu3, TODAY)
+assert lu3[TODAY][1][1] == {"FGM": 6, "FGA": 14, "FTM": 3, "FTA": 4, "PTS": 16, "REB": 9, "AST": 7, "STL": 1, "BLK": 0, "3PM": 1, "TO": 2}, lu3
+assert lu3[TODAY][1][2] is None and lu3[TODAY + timedelta(days=2)][1][1] is None  # no log for player 2; Friday is in the future
+assert server.planner_rows([f(1, "a", [2])], 1, MON, MON + timedelta(days=6), TODAY, lu3)[0]["actual"][2]["PTS"] == 16  # today's finished game shows
 server.fetch_gamelog = real_fetch
 print("ok")

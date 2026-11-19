@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from espn_api.basketball import League
 from espn_api.basketball.constant import POSITION_MAP, PRO_TEAM_MAP, STATS_MAP
@@ -27,6 +27,8 @@ GAMELOG_URL = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nb
 # ESPN's public site API uses different team codes from the fantasy API
 SITE_TO_FANTASY = {"GS": "GSW", "NO": "NOP", "NY": "NYK", "PHI": "PHL", "PHX": "PHO", "SA": "SAS", "UTAH": "UTA", "WSH": "WAS"}
 H2H_SEASONS = 4
+# ESPN's CDN can refuse Python's default User-Agent from cloud hosts such as Render
+BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
 
 
 def current_season():
@@ -137,9 +139,9 @@ def planner_rows(roster, team_id, start, end, today, lineups):
     keep = COUNTING + ["FGM", "FGA", "FTM", "FTA"]
     days = days_between(start, end)
 
-    def real(p, d):  # actual stats for a past day the player started and played
+    def real(p, d):  # actual stats for a day up to today that the player started and played
         stats = (lineups or {}).get(d, {}).get(team_id, {}).get(p.playerId)
-        return stats if d < today and isinstance(stats, dict) else None
+        return stats if d <= today and isinstance(stats, dict) else None
 
     return [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
              "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
@@ -285,6 +287,7 @@ def build_dashboard(league, me, now, news, week=None):
         "opponent": None,
     }
     lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
+    fill_actuals(lineups, today)
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
     data["planner"] = {"mine": planner_rows(me.roster, me.team_id, first, last, today, lineups),
                        "teams": team_games(league, first, last)}
@@ -357,12 +360,42 @@ def parse_gamelog(data):
     return sorted(games, key=lambda g: g["date"], reverse=True)
 
 
+def stat_line(game):
+    """A parsed game-log entry as numbers, with the same keys as season averages."""
+    st = game["stats"]
+    num = lambda v: float(v) if v not in ("", "-", None) else 0.0
+    fgm, fga = (num(x) for x in (st.get("FG%") or "0-0").split("-"))
+    ftm, fta = (num(x) for x in (st.get("FT%") or "0-0").split("-"))
+    return {"FGM": fgm, "FGA": fga, "FTM": ftm, "FTA": fta, **{k: num(st.get(k)) for k in COUNTING}}
+
+
+def fill_actuals(lineups, today):
+    """Put each starter's real stats from ESPN's game log into the daily lineups, for days up to today."""
+    days = {d: teams for d, teams in (lineups or {}).items() if d <= today}
+    ids = {pid for teams in days.values() for t in teams.values() for pid in t}
+
+    def logs(pid):
+        try:
+            return pid, {g["date"]: stat_line(g) for g in fetch_gamelog(pid, current_season())}
+        except Exception:
+            return pid, {}  # keep whatever the lineup data said
+
+    with ThreadPoolExecutor(8) as pool:
+        by_player = dict(pool.map(logs, ids))
+    for d, teams in days.items():
+        for t in teams.values():
+            for pid in t:
+                line = by_player.get(pid, {}).get(d.isoformat())
+                if line:
+                    t[pid] = line
+
+
 def fetch_gamelog(player_id, season):
     key = (player_id, season)
     hit = _gamelogs.get(key)
-    if hit and (season < current_season() or time.time() - hit[0] < 3600):
+    if hit and (season < current_season() or time.time() - hit[0] < 600):
         return hit[1]
-    with urlopen(GAMELOG_URL.format(player_id, season), timeout=10) as r:
+    with urlopen(Request(GAMELOG_URL.format(player_id, season), headers=BROWSER_UA), timeout=10) as r:
         games = parse_gamelog(json.load(r))  # raw response is ~3 MB in memory; keep only the parsed games
     _gamelogs[key] = (time.time(), games)
     return games
@@ -375,14 +408,18 @@ def vs_team(player_id: int, opp: str):
     # only your roster, so outsiders can't make the server fetch (and cache) every NBA player
     if player_id not in {p["id"] for hit in _cache.values() for p in hit["data"].get("roster", [])}:
         raise HTTPException(404, "Player not on your roster")
-    games = []
+    games, errors = [], []
     for season in range(current_season(), current_season() - H2H_SEASONS, -1):
         try:
             games += [g for g in fetch_gamelog(player_id, season) if g["opp"] == opp]
-        except Exception:
+        except Exception as e:
+            errors.append(f"{season}: {e}")
             continue  # rookie seasons and missing years 404; skip them
         if len(games) >= 3:
             break
+    if not games and errors and errors[0].startswith(f"{current_season()}:"):
+        # even this season failed, so this is ESPN being unreachable, not a player without games
+        raise HTTPException(502, "ESPN game log unavailable (" + "; ".join(errors) + ")")
     return {"opp": opp, "seasons": H2H_SEASONS, "games": games[:3]}
 
 
