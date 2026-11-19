@@ -484,6 +484,10 @@ def game_lines(p, team_id, lineups, now, first, last, scale=1.0):
             and (team_id is None or starting(p, team_id, x["date"].date(), lineups))}
 
 
+def healthy(p):
+    return p.injuryStatus in (None, "", "ACTIVE", "NORMAL") and not getattr(p, "injured", False)
+
+
 def free_agents(league, size=60):
     """Most-owned free agents (not waivers: those can't be added the same day), with their NBA schedule attached."""
     filters = {"players": {"filterStatus": {"value": ["FREEAGENT"]}, "limit": size,
@@ -553,7 +557,8 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         return out
     roster_ids = {p.playerId for p in me.roster}
     droppable = {int(x) for x in drops.split(",") if x.strip().isdigit()} & roster_ids
-    fas = free_agents(league)
+    # only healthy free agents: OUT, injured reserve, day-to-day or suspended players can't be counted on to play
+    fas = [p for p in free_agents(league) if healthy(p)]
     news = player_news(league, me.roster + fas)  # opponent: recent minutes only, saving ~15 news requests
 
     def entry(p, team_id, news_items, name=None):

@@ -311,7 +311,10 @@ me.roster.append(scrub)
 saved = server.connect, server.free_agents, server.day_lineups, server.acquisitions_left, server.datetime
 league.scoreboard = lambda week: [NS(home_team=me, away_team=opp, home_team_cats=cats, away_team_cats=None)]
 server.connect = lambda: (league, me)
-server.free_agents = lambda lg: [fa]
+hurt_star = f(52, "Hurt Star", [], injury="OUT", PTS=40, REB=12, AST=10)  # great season value, but out
+dtd = f(53, "Questionable Guy", [4, 5, 6], injury="DAY_TO_DAY", PTS=30)
+flagged = f(54, "Flagged", [4, 5, 6], PTS=30); flagged.injured = True
+server.free_agents = lambda lg: [hurt_star, dtd, flagged, fa]
 server.day_lineups = lambda *a: {}
 server.acquisitions_left = lambda *a: {"limit": 4, "per_period": None, "used": 2, "left": 2, "counted": []}
 server.datetime = type("D", (datetime,), {"now": classmethod(lambda c, tz=None: NOW)})
@@ -319,6 +322,8 @@ out = server.stream(drops="51,999,abc", plan=True)
 assert out["acquisitions"]["left"] == 2 and out["opponent"] == opp.team_name
 moves = out["plan"]["moves"]
 assert moves and moves[0]["add"]["name"] == "Free Guy (ATL)" and moves[0]["drop"]["name"] == "Scrub", moves
+assert all(m["add"]["name"].split(" (")[0] == "Free Guy" for m in moves), moves  # injured / day-to-day free agents never suggested
+assert server.healthy(fa) and not server.healthy(hurt_star) and not server.healthy(dtd) and not server.healthy(flagged)
 # breakdown: rows + this week's totals add up to the planned totals; the pickup is labeled
 pl = out["plan"]
 assert any(r["name"].startswith("Free Guy (ATL) · added") for r in pl["players"]), pl["players"]
