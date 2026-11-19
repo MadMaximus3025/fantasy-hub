@@ -120,6 +120,7 @@ def feed(pid):
         {"headline": "Johnson out", "story": "Johnson will miss Saturday's game with knee soreness."},
         {"headline": "Johnson plays 38 minutes", "story": "Johnson saw 38 minutes as his role expands."},
     ]}}
+server._news.clear()  # news is cached per player for 10 minutes
 kept = server.player_news(NS(espn_request=NS(get_player_news=feed)), [me.roster[0]])[1]
 assert [(n["kind"], n["headline"]) for n in kept] == [("Injury", "Johnson questionable Friday"), ("Playing time", "Johnson moved to the bench"),
                                                      ("Injury", "Johnson out")], kept
@@ -150,6 +151,7 @@ server.connect(); server.connect()
 assert len(logins) == 1
 server.connect(fresh=True)
 assert len(logins) == 2
+server._league["value"] = None  # don't leave the fake login behind for later tests
 
 # no saved data: a quick first version (no news, no actual stats) comes back with "pending"; the full build replaces it
 built = []
@@ -337,4 +339,33 @@ assert [p.name for p in server.free_agents(fa_league)] == ["Good FA"]
 resp = server.server_error(NS(url=NS(path="/api/stream")), KeyError("eligibleSlots"))
 assert resp.status_code == 500 and b"KeyError" in resp.body
 me.roster.remove(scrub)
+
+# role: news direction
+assert server.role_direction("Smith will start Friday in place of the injured Jones") == 1
+assert server.role_direction("Smith is expected to see more minutes with Jones sidelined") == 1
+assert server.role_direction("Smith was moved to the bench and will play a reduced role") == -1
+assert server.role_direction("Smith is questionable with an ankle sprain") == 0
+
+# role: recent minutes scale the whole line; the newest role news (last 7 days) moves it again
+def rp(season_min, recent_min, gp=4):
+    return NS(year=2027, stats={"2027_total": {"avg": {"MIN": season_min, "PTS": 10}},
+                                "2027_last_7": {"avg": {"MIN": recent_min, "GP": gp}}})
+f1, why1 = server.role_factor(rp(20, 30), [], NOW)
+assert round(f1, 2) == 1.5 and "minutes 20 → 30" in why1[0], (f1, why1)
+assert server.role_factor(rp(20, 30, gp=1), [], NOW)[0] == 1.0  # one game isn't a trend
+assert server.role_factor(rp(20, 60), [], NOW)[0] == 1.6  # capped
+fresh = {"role": 1, "headline": "Smith will start", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}
+old = dict(fresh, published=(NOW - timedelta(days=20)).isoformat() + "Z")
+assert round(server.role_factor(rp(20, 20), [fresh], NOW)[0], 2) == 1.2
+assert server.role_factor(rp(20, 20), [old], NOW)[0] == 1.0  # stale news ignored
+assert server.role_factor(rp(20, 20), [dict(fresh, role=-1)], NOW)[0] == 0.75
+
+# the planner passes the reason along with the pickup
+pl = __import__("streaming").plan(
+    [MON + timedelta(days=4)], 1, [{"id": 1, "name": "Bench", "games": {}}],
+    {c: 0 for c in __import__("streaming").CATS}, {}, [{"id": 9, "name": "Riser", "note": "minutes 20 → 30 (last 7 days)",
+     "lines": {MON + timedelta(days=4): {"PTS": 30, "REB": 9, "AST": 5, "STL": 1, "BLK": 1, "3PM": 2, "TO": -1, "FGM": 9, "FGA": 15, "FTM": 5, "FTA": 6}}}],
+    {1}, 3)
+assert pl["moves"][0]["why"] == "minutes 20 → 30 (last 7 days)" and "minutes 20 → 30" in pl["players"][1]["name"], pl
+server._league["value"] = None; server._cache.clear(); server._news.clear()  # leave no fake state behind
 print("ok")

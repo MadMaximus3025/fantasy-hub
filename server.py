@@ -284,22 +284,71 @@ ROLE_WORDS = re.compile(
     r"(out of|into|in) the rotation|rotation (spot|role|change)|demot\w*|promot\w*|DNP|did not play|coach'?s decision)\b", re.I)
 
 
+ROLE_UP = re.compile(
+    r"\b((will|to|set to|expected to|could|should) start|first start|start(s|ing)? in place of|"
+    r"(join|joins|move[sd]? into|enters?|re-?enters?) the starting lineup|"
+    r"(more|increased|extended|expanded|bigger|larger|heavier|extra) (minutes|role|workload|playing time|run)|"
+    r"role (expand|grow|increas)\w*|promot\w*)\b", re.I)
+ROLE_DOWN = re.compile(
+    r"\b(moved to the bench|off the bench|(to|from) the bench|benched|reserve role|"
+    r"(fewer|reduced|limited|smaller|lighter|decreased) (minutes|role|workload|playing time)|role (shrink|decreas)\w*|"
+    r"minutes (restriction|limit|cap)|out of the rotation|demot\w*|DNP|did not play|coach'?s decision)\b", re.I)
+
+
+def role_direction(text):
+    """+1 if the news says the player's role or minutes go up, -1 if down, 0 if it doesn't say."""
+    up, down = ROLE_UP.search(text), ROLE_DOWN.search(text)
+    return 1 if up and not down else -1 if down and not up else 0
+
+
+def role_factor(p, news, now):
+    """(minutes multiplier, reasons): recent minutes vs season, then the newest role news from the last 7 days.
+    Stats scale with minutes, so a bigger role (e.g. a teammate's reduced one) projects more of everything."""
+    season = season_avg(p).get("MIN") or 0
+    factor, why = 1.0, []
+    for split, need in (("last_7", 2), ("last_15", 3)):
+        avg = p.stats.get(f"{p.year}_{split}", {}).get("avg") or {}
+        if season and avg.get("MIN") and (avg.get("GP") or 0) >= need:
+            factor = max(0.5, min(1.6, avg["MIN"] / season))
+            if abs(factor - 1) >= 0.1:
+                why.append(f"minutes {season:.0f} → {avg['MIN']:.0f} ({split.replace('_', ' ')} days)")
+            break
+    for n in news:
+        if not (n.get("role") and n.get("published")):  # undated news: age unknown, so it doesn't move the projection
+            continue
+        if (now - datetime.fromisoformat(n["published"].replace("Z", "+00:00")).astimezone().replace(tzinfo=None)).days <= 7:
+            factor *= 1.2 if n["role"] > 0 else 0.75
+            why.append(f"news: {n['headline']}")
+            break
+    return factor, why
+
+
 def news_kind(text):
     """'Injury' or 'Playing time' when a news item matters for whether or how much a player plays; None otherwise."""
     return "Injury" if INJURY_WORDS.search(text) else "Playing time" if ROLE_WORDS.search(text) else None
 
 
+_news = {}  # player id -> (time, items); shared by the dashboard and the streaming planner for 10 minutes
+
+
 def player_news(league, roster):
     """Latest 3 news items per player that are about injuries or playing time (game recaps and stat lines left out)."""
     def one(p):
+        hit = _news.get(p.playerId)
+        if hit and time.time() - hit[0] < 600:
+            return p.playerId, hit[1]
         try:
             feed = league.espn_request.get_player_news(p.playerId).get("news", {}).get("feed", [])
-            items = [{"headline": tldr(n.get("headline")), "tldr": tldr(n.get("story")),
-                      "kind": news_kind(tldr(n.get("headline"), 10_000) + " " + tldr(n.get("story"), 10_000))} for n in feed]
-            # whole story is classified, not just its first sentence, which is all the page shows
-            return p.playerId, [n for n in items if n["kind"]][:3]
         except Exception:
             return p.playerId, []  # news is nice-to-have; never break the dashboard over it
+        items = []
+        for n in feed:
+            text = tldr(n.get("headline"), 10_000) + " " + tldr(n.get("story"), 10_000)  # whole story, not just the shown sentence
+            if news_kind(text):
+                items.append({"headline": tldr(n.get("headline")), "tldr": tldr(n.get("story")), "kind": news_kind(text),
+                              "role": role_direction(text), "published": n.get("published") or ""})
+        _news[p.playerId] = (time.time(), items[:3])
+        return p.playerId, items[:3]
 
     # one request per player; run them side by side instead of one after another
     with ThreadPoolExecutor(8) as pool:
@@ -424,12 +473,12 @@ def start_build(week, fresh=False):
         build_full(week, fresh)
 
 
-def game_lines(p, team_id, lineups, now, first, last):
-    """{date: season-average line} for p's games not started yet this week; with a team_id, only days p starts."""
+def game_lines(p, team_id, lineups, now, first, last, scale=1.0):
+    """{date: season-average line x scale} for p's games not started yet this week; with a team_id, only days p starts."""
     if p.injuryStatus == "OUT":
         return {}
     avg = season_avg(p)
-    line = {k: avg.get(k, 0) for k in streaming.KEYS}
+    line = {k: avg.get(k, 0) * scale for k in streaming.KEYS}
     return {x["date"].date(): line for x in p.schedule.values()
             if now < x["date"] and first <= x["date"].date() <= last
             and (team_id is None or starting(p, team_id, x["date"].date(), lineups))}
@@ -504,15 +553,23 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         return out
     roster_ids = {p.playerId for p in me.roster}
     droppable = {int(x) for x in drops.split(",") if x.strip().isdigit()} & roster_ids
-    opp_players = [{"id": p.playerId, "name": p.name, "games": game_lines(p, opp.team_id, lineups, now, first, last)} for p in opp.roster]
+    fas = free_agents(league)
+    news = player_news(league, me.roster + fas)  # opponent: recent minutes only, saving ~15 news requests
+
+    def entry(p, team_id, news_items, name=None):
+        """A player for the planner, his lines scaled by role: recent minutes and role news."""
+        factor, why = role_factor(p, news_items, now)
+        lines = game_lines(p, team_id, lineups, now, first, last, factor)
+        return {"id": p.playerId, "name": name or p.name, "note": "; ".join(why), "games" if team_id else "lines": lines}
+
+    opp_players = [entry(p, opp.team_id, []) for p in opp.roster]
     out["plan"] = streaming.plan(
         days=days_between(max(today, first), last),
         slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR")),  # your starting spots
-        mine=[{"id": p.playerId, "name": p.name, "games": game_lines(p, me.team_id, lineups, now, first, last)} for p in me.roster],
+        mine=[entry(p, me.team_id, news.get(p.playerId, [])) for p in me.roster],
         opp_totals=streaming.totals(scores(opp_cats), opp_players),
         current=scores(my_cats),
-        free_agents=[{"id": p.playerId, "name": f"{p.name} ({p.proTeam})", "lines": game_lines(p, None, lineups, now, first, last)}
-                     for p in free_agents(league)],
+        free_agents=[entry(p, None, news.get(p.playerId, []), f"{p.name} ({p.proTeam})") for p in fas],
         droppable=droppable,
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
     )

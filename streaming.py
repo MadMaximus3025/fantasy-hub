@@ -53,7 +53,7 @@ def rows(players, tags=None):
         tag = (tags or {}).get(p["id"])
         if not p["games"] and not tag:
             continue
-        name = p["name"] + (f" · {tag}" if tag else "")
+        name = p["name"] + (f" · {tag}" if tag else "") + (f" ({p['note']})" if p.get("note") else "")
         out.append({"name": name, "games": len(p["games"]), **{k: sum(l.get(k, 0) for l in p["games"].values()) for k in KEYS}})
     return out
 
@@ -97,7 +97,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
             if d >= day and new_used[d] < slots:  # only counts on days a starting spot is free
                 games[d] = line
                 new_used[d] += 1
-        new_roster.append({"id": add["id"], "name": add["name"], "games": games})
+        new_roster.append({"id": add["id"], "name": add["name"], "note": add.get("note", ""), "games": games})
         return new_roster, new_used, games
 
     for _ in range(max(0, int(acquisitions))):
@@ -128,7 +128,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         added_on[fa["id"]] = day
         dropped.add(drop["id"])
         moves.append({"day": day, "add": {"id": fa["id"], "name": fa["name"]}, "drop": {"id": drop["id"], "name": drop["name"]},
-                      "games": sorted(games)})
+                      "games": sorted(games), "why": fa.get("note", "")})
     end = totals(current, roster)
     tags = {m["add"]["id"]: f"added {m['day'].strftime('%a %m/%d')}" for m in moves}
     for m in moves:  # a streamer added and later dropped shows both
