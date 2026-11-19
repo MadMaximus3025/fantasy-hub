@@ -4,6 +4,7 @@ from types import SimpleNamespace as NS
 
 import server
 
+server.BACKGROUND = False  # run dashboard builds inline so tests see their results
 TODAY = date(2026, 11, 18)  # Wednesday
 NOW = datetime(2026, 11, 18, 12)  # noon, before tonight's 7pm games
 MON = TODAY - timedelta(days=2)
@@ -94,7 +95,7 @@ import os
 from fastapi import HTTPException
 os.environ["LEAGUE_ID"] = "1"
 real_league, server.League = server.League, lambda **kw: (_ for _ in ()).throw(Exception("espn_s2 and swid are required"))
-server._cache.clear()
+server._cache.clear(); server._league["value"] = None
 try:
     server.dashboard(refresh=True); assert False
 except HTTPException as e:
@@ -111,16 +112,47 @@ assert server.player_news(nl, me.roster) == {1: [{"headline": "Hot", "tldr": "Sc
 
 # refresh: served from cache when under 60s old, refetched after
 import time as _t
-server._cache[None] = {"at": _t.time() - 30, "data": {"cached": True}}
+server._cache[None] = {"at": _t.time() - 30, "data": {"cached": True}, "partial": False}
 assert server.dashboard(refresh=True) == {"cached": True}
 
 # a fresh ESPN pull is stamped with its time; cached responses keep the old stamp
 os.environ["LEAGUE_ID"] = "1"
 saved = server.League, server.find_my_team, server.player_news, server.build_dashboard
-server.League, server.find_my_team, server.player_news, server.build_dashboard = (lambda **kw: None), (lambda *a: NS(roster=[])), (lambda *a: {}), (lambda *a: {})
-server._cache.clear()
+server.League, server.find_my_team, server.player_news, server.build_dashboard = (lambda **kw: None), (lambda *a: NS(roster=[])), (lambda *a: {}), (lambda *a, **k: {})
+server._cache.clear(); server._league["value"] = None
 stamp = server.dashboard()["updated"]
 assert datetime.fromisoformat(stamp).tzinfo is not None and server.dashboard()["updated"] == stamp
+
+# login reused between requests; refresh logs in again
+logins = []
+server.League = lambda **kw: logins.append(1) or NS()
+server._league["value"] = None
+server.connect(); server.connect()
+assert len(logins) == 1
+server.connect(fresh=True)
+assert len(logins) == 2
+
+# no saved data: a quick first version (no news, no actual stats) comes back with "pending"; the full build replaces it
+built = []
+server.build_dashboard = lambda league, me, now, news, week=None, actuals=True: built.append(actuals) or {"actuals": actuals}
+real_start = server.start_build
+server.start_build = lambda week, fresh=False: server._building.add(week)  # a background build that hasn't finished yet
+server._cache.clear(); server._building.clear()
+first = server.dashboard(week=7)
+assert first["actuals"] is False and first["pending"] and built == [False]
+server._building.discard(7)
+server.build_full(7)  # what the background thread does
+assert server.dashboard(week=7)["actuals"] is True and "pending" not in server.dashboard(week=7)
+# old saved data is shown right away while a new build runs
+server._cache[7]["at"] -= 10_000
+stale = server.dashboard(week=7)
+assert stale["actuals"] is True and stale["pending"]
+# a failed full build: the quick version stays, with a warning, and stops asking the page to poll
+server._cache[8] = {"at": 0, "partial": True, "data": {"actuals": False}}
+server.build_dashboard = lambda *a, **k: 1 / 0
+server.build_full(8)
+assert "warning" in server.dashboard(week=8) and "pending" not in server.dashboard(week=8)
+server.start_build = real_start
 server.League, server.find_my_team, server.player_news, server.build_dashboard = saved
 
 # after tonight's games: Wednesday is already in the current totals, so it is not projected again
@@ -198,7 +230,7 @@ assert g[0]["stats"] == {"FG%": "7-15", "FT%": "5-5", "3PM": "2", "PTS": "21", "
 
 # vs endpoint: only roster players, cached parsed games, newest 3, bad team rejected
 from fastapi import HTTPException
-server._cache.clear(); server._cache[6] = {"at": 0, "data": {"roster": [{"id": 7}]}}
+server._cache.clear(); server._cache[6] = {"at": 0, "data": {"roster": [{"id": 7}]}, "partial": False}
 fake = {2027: [{"opp": "NYK", "date": "2026-11-01"}], 2026: Exception, 2025: [{"opp": "NYK", "date": f"2025-0{m}-01"} for m in (3, 2, 1)] + [{"opp": "OKC", "date": "2025-04-01"}]}
 def fake_fetch(pid, season):
     if fake.get(season) is Exception or season not in fake:

@@ -185,10 +185,10 @@ function rosterCard(d) {
         <div class="tag">
           ${p.injury ? `<span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}
           <span class="gl">${p.games_left} G left</span>
-          <button data-news="${i}" aria-expanded="false" aria-controls="news-${i}">Games${p.news.length ? ` · ${p.news.length} news` : ""} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>
+          <button data-news="${i}" aria-expanded="${i === openPlayer}" aria-controls="news-${i}">Games${p.news.length ? ` · ${p.news.length} news` : ""} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>
         </div>
       </div>
-      <div class="news" id="news-${i}">
+      <div class="news${i === openPlayer ? " open" : ""}" id="news-${i}">
         <ul class="games" aria-label="Games left this matchup">${p.upcoming.length
           ? p.upcoming.map(g => `<li><button class="chip" data-h2h="${p.id}" data-opp="${esc(g.opp)}" data-name="${esc(p.name)}" aria-haspopup="dialog" aria-expanded="false"><span>${gameDay(g.date)}</span> vs ${esc(g.opp)}</button></li>`).join("")
           : "<li>No games left this matchup</li>"}</ul>
@@ -437,6 +437,8 @@ function breakdownTable(team, players, current, total) {
 }
 
 let week = null;  // selected matchup week; null until the first load tells us the current one
+let currentWeek = null;
+let openPlayer = null;  // roster row whose games/news panel is open, kept open when fresh data arrives
 let lastData = null;
 
 function render(d) {
@@ -449,22 +451,33 @@ function render(d) {
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
 
-async function load(refresh = false) {
-  closeH2H();
+let loadGen = 0;  // newer loads cancel older ones' follow-up checks
+
+async function load(refresh = false, poll = 0) {
+  const gen = poll ? loadGen : ++loadGen;
+  if (!poll) closeH2H();
   if (refresh) Object.assign(stream, { data: null, plan: null });  // streaming page refetches too
-  document.querySelectorAll(".picker button, .picker select").forEach(x => x.disabled = true);
+  if (!poll) document.querySelectorAll(".picker button, .picker select").forEach(x => x.disabled = true);
   try {
     const q = new URLSearchParams();
-    if (week) q.set("week", week);
+    if (week && week !== currentWeek) q.set("week", week);  // the current week shares one server cache entry, kept fresh in the background
     if (refresh) q.set("refresh", "true");
     const r = await fetch("/api/dashboard?" + q);
     const d = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));  // non-JSON error pages
     if (!r.ok) throw new Error(d.detail || r.statusText);
+    if (gen !== loadGen) return;  // the user picked another week meanwhile
+    if (week !== d.week.number) openPlayer = null;
     week = d.week.number;
+    currentWeek = d.week.current;
     $("#team").innerHTML = `${esc(d.team)}<small>${esc(d.league)}</small>`;
-    $("#updated").textContent = d.updated ? "Updated " + new Date(d.updated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+    $("#updated").textContent = (d.updated ? "Updated " + new Date(d.updated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "")
+      + (d.pending ? " · updating…" : "") + (d.warning ? ` · ${d.warning}` : "");
     render(d);
+    // the server sent saved or partial data and is building the rest: check back until it's done (about 1 minute max)
+    if (d.pending && poll < 30) setTimeout(() => gen === loadGen && load(false, poll + 1), 2000);
   } catch (e) {
+    if (gen !== loadGen) return;
+    if (poll) return;  // keep what's on screen if a follow-up check fails
     $("#app").innerHTML = `<p class="error">Could not load league: ${esc(e.message)}</p>`;
   }
 }
@@ -530,6 +543,7 @@ $("#app").addEventListener("click", e => {
   });
   b.setAttribute("aria-expanded", open);
   $("#news-" + b.dataset.news).classList.toggle("open", open);
+  openPlayer = open ? Number(b.dataset.news) : null;
 });
 $("#refresh").onclick = () => load(true);
 $("#app").addEventListener("input", e => { if (e.target.id === "acq") stream.acq = e.target.value; });

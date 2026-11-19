@@ -3,9 +3,11 @@ import logging
 import json
 import os
 import re
+import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
@@ -22,7 +24,25 @@ COUNTING = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO"]
 CATS = ["FG%", "FT%", "3PM", "PTS", "REB", "AST", "STL", "BLK", "TO"]
 CACHE_SECONDS = 300
 
-app = FastAPI()
+REFRESH_SECONDS = 240  # background rebuild of the current week, inside the 5-minute cache
+BACKGROUND = True  # tests set False to run builds inline
+
+
+def keep_fresh():
+    """While the server is up, rebuild the current week every few minutes so visits get saved data instantly."""
+    while True:
+        if os.environ.get("LEAGUE_ID"):
+            start_build(None)
+        time.sleep(REFRESH_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    threading.Thread(target=keep_fresh, daemon=True).start()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.exception_handler(Exception)
@@ -30,7 +50,11 @@ def server_error(request: HTTPRequest, exc: Exception):
     """Unexpected errors: full traceback in the server log, a readable reason on the page instead of a bare 500."""
     logging.exception("Unhandled error on %s", request.url.path)
     return JSONResponse({"detail": f"Server error ({type(exc).__name__}: {exc})"}, status_code=500)
-_cache = {}  # matchup week (None = current) -> {"at": time, "data": dashboard}
+_cache = {}  # matchup week (None = current) -> {"at": time, "data": dashboard, "partial": no news/actuals yet}
+_league = {"at": 0, "value": None}  # ESPN login + league data, shared by every page for CACHE_SECONDS
+_login_lock = threading.Lock()  # one ESPN login at a time; concurrent visits wait and reuse it
+_building = set()  # weeks with a full build running
+_building_lock = threading.Lock()
 _gamelogs = {}
 
 GAMELOG_URL = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{}/gamelog?season={}"
@@ -270,7 +294,7 @@ def matchup_sides(league, me, week):
     return (opp if hasattr(opp, "roster") else None), my_cats, opp_cats
 
 
-def build_dashboard(league, me, now, news, week=None):
+def build_dashboard(league, me, now, news, week=None, actuals=True):
     today = now.date()
     current = league.currentMatchupPeriod
     week = week or current
@@ -299,7 +323,8 @@ def build_dashboard(league, me, now, news, week=None):
         "opponent": None,
     }
     lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
-    fill_actuals(lineups, today)
+    if actuals:  # one game-log request per starter; the quick first version skips it
+        fill_actuals(lineups, today)
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
     data["planner"] = {"mine": planner_rows(me.roster, me.team_id, first, last, today, lineups),
                        "teams": team_games(league, first, last)}
@@ -322,20 +347,57 @@ def build_dashboard(league, me, now, news, week=None):
     return data
 
 
-def connect():
-    """Log in to the ESPN league and find your team; clear 5xx errors when that fails."""
+def connect(fresh=False):
+    """ESPN league + your team, reused for CACHE_SECONDS (fresh=True logs in again); clear 5xx errors on failure."""
     if not os.environ.get("LEAGUE_ID"):
         raise HTTPException(500, "LEAGUE_ID not set. Copy .env.example to .env and fill it in.")
+    with _login_lock:
+        if not fresh and _league["value"] and time.time() - _league["at"] < CACHE_SECONDS:
+            return _league["value"]
+        try:
+            league = League(
+                league_id=int(os.environ["LEAGUE_ID"]),
+                year=current_season(),
+                espn_s2=os.environ.get("ESPN_S2") or None,
+                swid=os.environ.get("SWID") or None,
+            )
+        except Exception as e:
+            raise HTTPException(502, f"ESPN refused the request ({e}). Check LEAGUE_ID, ESPN_S2 and SWID; the cookies expire.")
+        value = (league, find_my_team(league, os.environ.get("TEAM_ID"), os.environ.get("SWID")))
+        _league.update(at=time.time(), value=value)
+        return value
+
+
+def stamped(data):
+    data["updated"] = datetime.now(timezone.utc).isoformat()  # when ESPN was last pulled; the browser shows it in local time
+    return data
+
+
+def build_full(week, fresh=False):
+    """Everything for a week, news and actual game stats included, saved to the cache."""
     try:
-        league = League(
-            league_id=int(os.environ["LEAGUE_ID"]),
-            year=current_season(),
-            espn_s2=os.environ.get("ESPN_S2") or None,
-            swid=os.environ.get("SWID") or None,
-        )
+        league, me = connect(fresh)
+        data = stamped(build_dashboard(league, me, datetime.now(), player_news(league, me.roster), week))
+        _cache[week] = {"at": time.time(), "data": data, "partial": False}
     except Exception as e:
-        raise HTTPException(502, f"ESPN refused the request ({e}). Check LEAGUE_ID, ESPN_S2 and SWID; the cookies expire.")
-    return league, find_my_team(league, os.environ.get("TEAM_ID"), os.environ.get("SWID"))
+        logging.exception("Full dashboard build failed for week %s", week)
+        if _cache.get(week, {}).get("partial"):
+            _cache[week]["failed"] = getattr(e, "detail", str(e))
+    finally:
+        with _building_lock:
+            _building.discard(week)
+
+
+def start_build(week, fresh=False):
+    """Run build_full in the background unless one is already running for that week."""
+    with _building_lock:
+        if week in _building:
+            return
+        _building.add(week)
+    if BACKGROUND:
+        threading.Thread(target=build_full, args=(week, fresh), daemon=True).start()
+    else:
+        build_full(week, fresh)
 
 
 def game_lines(p, team_id, lineups, now, first, last):
@@ -437,15 +499,21 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
 
 @app.get("/api/dashboard")
 def dashboard(refresh: bool = False, week: Annotated[int | None, Query(ge=1, le=30)] = None):
-    # Refresh may skip the cache only after 60s, so repeat clicks can't flood ESPN with your cookie
+    """Saved data right away when there is any; otherwise a quick first version (no news or actual game stats).
+    Either way a full build runs in the background when needed, and "pending" tells the page to check back."""
     hit = _cache.get(week)
-    if hit and time.time() - hit["at"] < (60 if refresh else CACHE_SECONDS):
+    # Refresh may skip the cache only after 60s, so repeat clicks can't flood ESPN with your cookie
+    if hit and not hit.get("partial") and time.time() - hit["at"] < (60 if refresh else CACHE_SECONDS):
         return hit["data"]
-    league, me = connect()
-    data = build_dashboard(league, me, datetime.now(), player_news(league, me.roster), week)
-    data["updated"] = datetime.now(timezone.utc).isoformat()  # when ESPN was last pulled; the browser shows it in local time
-    _cache[week] = {"at": time.time(), "data": data}
-    return data
+    if hit and hit.get("failed") and week not in _building and not refresh:
+        return {**hit["data"], "warning": f"Couldn't load news and actual stats: {hit['failed']}"}
+    if not hit:
+        league, me = connect()
+        hit = _cache[week] = {"at": time.time(), "partial": True,
+                              "data": stamped(build_dashboard(league, me, datetime.now(), {}, week, actuals=False))}
+    start_build(week, fresh=refresh)
+    hit = _cache[week]  # an inline build (tests) may have finished already
+    return hit["data"] if not hit.get("partial") and week not in _building else {**hit["data"], "pending": True}
 
 
 def parse_gamelog(data):
