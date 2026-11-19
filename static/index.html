@@ -64,6 +64,10 @@
   .guide td[class^="st-"] { color:var(--muted); }
   .guide td.st-out { color:var(--loss); }
   .guide .wk { font-weight:700; background:var(--surface-2); }
+  .guide .expand { background:none; border:0; padding:0; min-height:var(--tap); color:var(--text); font:600 var(--fs-md) var(--font); filter:none; }
+  .guide .expand:hover { text-decoration:underline; }
+  .guide tr.detail th, .guide tr.detail td { font-size:var(--fs-sm); background:var(--row-hover); }
+  .guide tr.detail th { color:var(--muted); padding-left:var(--sp-4); }
   .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-md); padding:var(--sp-3); min-width:0; box-shadow:var(--shadow); }
   .card h2 { margin:0 0 var(--sp-2); font-size:var(--fs-sm); font-weight:600; letter-spacing:.5px; color:var(--muted); text-transform:uppercase; }
   button { display:inline-flex; align-items:center; gap:var(--sp-1); background:var(--accent); color:var(--on-accent); border:0; border-radius:var(--r-pill); padding:0 var(--sp-3); min-height:var(--tap); font:600 var(--fs-sm) var(--font); cursor:pointer; transition:background-color var(--dur), filter var(--dur); }
@@ -198,7 +202,7 @@ const weekDays = d => {
 };
 
 // ---- Weekly planner page (#planner) ----
-const planner = { roster: "mine", stat: "PTS", teams: new Set() };
+const planner = { roster: "mine", stat: "PTS", teams: new Set(), open: new Set() };
 
 function matchupGamesCard(d) {
   const mine = d.slate.mine, theirs = d.slate.theirs || mine.map(() => 0);
@@ -231,19 +235,23 @@ function rosterGuideCard(d) {
   if (!d.planner[planner.roster]) planner.roster = "mine";  // e.g. opponent chosen, then a bye week
   const rows = d.planner[planner.roster];
   const shown = planner.teams.size ? rows.filter(r => planner.teams.has(r.team)) : rows;
-  const c = planner.stat, isPct = c.endsWith("%"), [m, a] = c === "FG%" ? ["FGM", "FGA"] : ["FTM", "FTA"];
+  const c = planner.stat;
   const one = v => (Math.round(v * 10) / 10).toFixed(1);
-  const cell = (r, s) => s !== "start" ? `<td class="st-${s}">${{ bench: "BE", out: "OUT", dnp: "DNP", off: "·" }[s]}</td>`
-    : `<td>${isPct ? (r.avg[a] ? pct(`${r.avg[m]}-${r.avg[a]}`) : "—") : one(r.avg[c])}</td>`;
-  const week = r => {
-    if (r.slot === "IR") return "IR";
-    const n = r.days.filter(s => s === "start").length;
-    return isPct ? (r.avg[a] * n ? pct(`${r.avg[m] * n}-${r.avg[a] * n}`) : "—") : one(r.avg[c] * n);
+  // stat value over n starts: counting stats add up; FG%/FT% are makes ÷ attempts
+  const val = (r, st, n = 1) => {
+    if (!st.endsWith("%")) return one(r.avg[st] * n);
+    const [m, a] = st === "FG%" ? ["FGM", "FGA"] : ["FTM", "FTA"];
+    return r.avg[a] * n ? pct(`${r.avg[m] * n}-${r.avg[a] * n}`) : "—";
   };
+  const cell = (r, s, st) => s !== "start" ? `<td class="st-${s}">${{ bench: "BE", out: "OUT", dnp: "DNP", off: "·" }[s]}</td>` : `<td>${val(r, st)}</td>`;
+  const week = (r, st) => r.slot === "IR" ? "IR" : val(r, st, r.days.filter(s => s === "start").length);
+  const details = r => !planner.open.has(r.id) ? "" : CATS9.map(st => `<tr class="detail"><td></td><th scope="row">${st}</th>
+      ${r.days.map(s => cell(r, s, st)).join("")}<td class="wk">${week(r, st)}</td></tr>`).join("");
   const days = weekDays(d);
   const head = `<tr><th scope="col">Slot</th><th scope="col">Player</th>${days.map(dt => `<th scope="col">${dt.toLocaleDateString(undefined, { weekday: "short" })}<small>${dt.getDate()}</small></th>`).join("")}<th scope="col">Week ${c}</th></tr>`;
-  const body = shown.map(r => `<tr><td>${esc(r.slot || "–")}</td><th scope="row">${esc(r.name)}${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}<small>${esc(r.team)}</small></th>
-      ${r.days.map(s => cell(r, s)).join("")}<td class="wk">${week(r)}</td></tr>`).join("");
+  const body = shown.map(r => `<tr><td>${esc(r.slot || "–")}</td><th scope="row">
+        <button class="expand" data-expand="${r.id}" aria-expanded="${planner.open.has(r.id)}">${esc(r.name)} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}<small>${esc(r.team)}</small></th>
+      ${r.days.map(s => cell(r, s, c)).join("")}<td class="wk">${week(r, c)}</td></tr>${details(r)}`).join("");
   const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label}</option>`;
   return `<section class="card guide"><div class="slate-head"><h2>Roster guide</h2>
       <div class="picker">
@@ -251,7 +259,7 @@ function rosterGuideCard(d) {
         <select id="pl-stat" aria-label="Projection stat">${CATS9.map(x => opt(x, x, c)).join("")}</select>
       </div></div>
     <div class="h2h-scroll"><table><thead>${head}</thead><tbody>${body || `<tr><td colspan="${days.length + 3}" class="muted">No players on the selected teams.</td></tr>`}</tbody></table></div>
-    <p class="muted">Season-average ${c} on days a player starts (past days: started and played). BE = bench, OUT = injured, DNP = started but no stats, · = no game.${planner.teams.size ? ` Filtered to ${[...planner.teams].join(", ")}.` : ""}</p></section>`;
+    <p class="muted">Season-average ${c} on days a player starts (past days: started and played). Click a name for all 9 stats. BE = bench, OUT = injured, DNP = started but no stats, · = no game.${planner.teams.size ? ` Filtered to ${[...planner.teams].join(", ")}.` : ""}</p></section>`;
 }
 
 const CATS9 = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%"];
@@ -422,6 +430,13 @@ $("#app").addEventListener("change", e => {
 });
 // Games-per-team chips filter the roster guide
 $("#app").addEventListener("click", e => {
+  const x = e.target.closest("[data-expand]");
+  if (x) {
+    const id = Number(x.dataset.expand);
+    planner.open.has(id) ? planner.open.delete(id) : planner.open.add(id);
+    render(lastData);
+    return document.querySelector(`[data-expand="${id}"]`)?.focus();
+  }
   const t = e.target.closest("[data-team]");
   if (!t) return;
   planner.teams.has(t.dataset.team) ? planner.teams.delete(t.dataset.team) : planner.teams.add(t.dataset.team);
