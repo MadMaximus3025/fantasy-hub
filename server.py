@@ -1,4 +1,5 @@
 import html
+import logging
 import json
 import os
 import re
@@ -14,14 +15,21 @@ import streaming
 from espn_api.basketball import League
 from espn_api.basketball.player import Player
 from espn_api.basketball.constant import POSITION_MAP, PRO_TEAM_MAP, STATS_MAP
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request as HTTPRequest
+from fastapi.responses import FileResponse, JSONResponse
 
 COUNTING = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO"]
 CATS = ["FG%", "FT%", "3PM", "PTS", "REB", "AST", "STL", "BLK", "TO"]
 CACHE_SECONDS = 300
 
 app = FastAPI()
+
+
+@app.exception_handler(Exception)
+def server_error(request: HTTPRequest, exc: Exception):
+    """Unexpected errors: full traceback in the server log, a readable reason on the page instead of a bare 500."""
+    logging.exception("Unhandled error on %s", request.url.path)
+    return JSONResponse({"detail": f"Server error ({type(exc).__name__}: {exc})"}, status_code=500)
 _cache = {}  # matchup week (None = current) -> {"at": time, "data": dashboard}
 _gamelogs = {}
 
@@ -348,7 +356,13 @@ def free_agents(league, size=60):
     data = league.espn_request.league_get(params={"view": "kona_player_info", "scoringPeriodId": league.scoringPeriodId},
                                           headers={"x-fantasy-filter": json.dumps(filters)})
     # espn_api's own free_agents() leaves out the schedule, which the planner needs
-    return [Player(p, league.year, league.pro_schedule) for p in data.get("players", [])]
+    players = []
+    for p in data.get("players", []):
+        try:
+            players.append(Player(p, league.year, league.pro_schedule))
+        except Exception:
+            logging.exception("Skipped a free agent ESPN sent in an unexpected shape")  # one bad entry shouldn't sink the plan
+    return players
 
 
 def acquisitions_left(league, me, first, last, week):

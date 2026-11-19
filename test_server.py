@@ -273,5 +273,16 @@ assert sum(r["PTS"] for r in pl["opp_players"]) + pl["opp_current"].get("PTS", 0
 assert server.stream(drops="999", plan=True)["plan"]["moves"] == []  # 999 isn't on your roster, so nothing is droppable
 assert "plan" not in server.stream()  # roster + acquisitions only until you ask for a plan
 server.connect, server.free_agents, server.day_lineups, server.acquisitions_left, server.datetime = saved
+
+# free agents: an entry that can't be read is skipped, the rest still come back
+good = {"id": 70, "fullName": "Good FA", "defaultPositionId": 1, "eligibleSlots": [0], "proTeamId": 1, "injuryStatus": "ACTIVE",
+        "player": {"id": 70, "fullName": "Good FA", "defaultPositionId": 1, "eligibleSlots": [0], "proTeamId": 1, "stats": []}}
+bad = {"id": 71, "player": {}}
+fa_league = NS(year=2027, scoringPeriodId=30, pro_schedule={}, espn_request=NS(league_get=lambda params, headers: {"players": [bad, good]}))
+assert [p.name for p in server.free_agents(fa_league)] == ["Good FA"]
+
+# unexpected errors come back as JSON with the reason (shown on the page), not a bare 500
+resp = server.server_error(NS(url=NS(path="/api/stream")), KeyError("eligibleSlots"))
+assert resp.status_code == 500 and b"KeyError" in resp.body
 me.roster.remove(scrub)
 print("ok")
