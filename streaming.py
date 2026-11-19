@@ -127,7 +127,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
             if d >= day and new_used[d] < slots:  # only counts on days a starting spot is free
                 games[d] = line
                 new_used[d] += 1
-        new_roster.append({"id": add["id"], "name": add["name"], "note": add.get("note", ""), "games": games})
+        new_roster.append({"id": add["id"], "name": add["name"], "note": add.get("note", ""), "per_game": add.get("per_game"), "games": games})
         return new_roster, new_used, games
 
     for _ in range(max(0, int(acquisitions))):
@@ -167,7 +167,8 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         best = s
         added_on[fa["id"]] = day
         dropped.add(drop["id"])
-        moves.append({"day": day, "add": {"id": fa["id"], "name": fa["name"]}, "drop": {"id": drop["id"], "name": drop["name"]},
+        moves.append({"day": day, "add": {"id": fa["id"], "name": fa["name"], "line": fa.get("per_game")},
+                      "drop": {"id": drop["id"], "name": drop["name"], "line": drop.get("per_game")},
                       "games": sorted(games), "why": fa.get("note", ""),
                       "kind": "stream" if dw > 0 else "upgrade", "week": dw, "value": round(dv, 2),
                       "next_games": next_games.get(fa["id"], 0)})

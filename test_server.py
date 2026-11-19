@@ -323,6 +323,7 @@ assert out["acquisitions"]["left"] == 2 and out["opponent"] == opp.team_name
 moves = out["plan"]["moves"]
 assert moves and moves[0]["add"]["name"] == "Free Guy (ATL)" and moves[0]["drop"]["name"] == "Scrub", moves
 assert all(m["add"]["name"].split(" (")[0] == "Free Guy" for m in moves), moves  # injured / day-to-day free agents never suggested
+assert moves[0]["add"]["line"]["PTS"] == 25 and moves[0]["drop"]["line"] is not None  # per-game lines for the side-by-side view
 assert server.healthy(fa) and not server.healthy(hurt_star) and not server.healthy(dtd) and not server.healthy(flagged)
 # breakdown: rows + this week's totals add up to the planned totals; the pickup is labeled
 pl = out["plan"]
