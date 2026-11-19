@@ -56,6 +56,7 @@
   .tg-row { display:flex; gap:var(--sp-3); align-items:flex-start; padding:var(--sp-2) 0; border-top:1px solid var(--line); }
   .tg-n { font:700 var(--fs-lg) var(--font-num); min-width:1.5em; }
   .tg-teams { display:flex; flex-wrap:wrap; gap:var(--sp-1); }
+  .chip.mine { border:2px solid var(--focus); color:var(--text); font-weight:700; }
   .chip[aria-pressed="true"] { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
   .guide th small, .guide td small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
   .guide th, .guide td { white-space:nowrap; text-align:center; }
@@ -217,10 +218,13 @@ function matchupGamesCard(d) {
 function teamGamesCard(d) {
   const groups = {};
   for (const [team, n] of Object.entries(d.planner.teams || {})) (groups[n] ||= []).push(team);
+  // teams where one of your players has at least one start this week
+  const mine = new Set(d.planner.mine.filter(r => r.days.includes("start")).map(r => r.team));
   const rows = Object.keys(groups).map(Number).sort((a, b) => b - a).map(n => `<div class="tg-row"><span class="tg-n">${n}</span>
-      <span class="tg-teams">${groups[n].sort().map(t => `<button class="chip" data-team="${esc(t)}" aria-pressed="${planner.teams.has(t)}">${esc(t)}</button>`).join("")}</span></div>`).join("");
+      <span class="tg-teams">${groups[n].sort().map(t => `<button class="chip${mine.has(t) ? " mine" : ""}" data-team="${esc(t)}" aria-pressed="${planner.teams.has(t)}"${mine.has(t) ? ` aria-label="${esc(t)}, you have starters"` : ""}>${esc(t)}</button>`).join("")}</span></div>`).join("");
   return `<section class="card"><div class="slate-head"><h2>Games per team</h2><span class="muted">Click to filter</span></div>
-    ${rows || '<p class="muted">No NBA schedule for this week.</p>'}</section>`;
+    ${rows || '<p class="muted">No NBA schedule for this week.</p>'}
+    ${mine.size ? '<p class="muted">Bold outline: teams where you have a starter this week.</p>' : ""}</section>`;
 }
 
 function rosterGuideCard(d) {
