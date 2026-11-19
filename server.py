@@ -11,7 +11,7 @@ from typing import Annotated
 from urllib.request import urlopen
 
 from espn_api.basketball import League
-from espn_api.basketball.constant import POSITION_MAP, PRO_TEAM_MAP
+from espn_api.basketball.constant import POSITION_MAP, PRO_TEAM_MAP, STATS_MAP
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
@@ -66,13 +66,16 @@ def game_dates(player, start, end):
 
 
 def played(entry, period):
-    """The player recorded stats in that scoring period (one period = one day)."""
-    stats = entry.get("playerPoolEntry", {}).get("player", {}).get("stats", [])
-    return any(s.get("scoringPeriodId") == period and s.get("statSourceId", 0) == 0 and any(s.get("stats", {}).values()) for s in stats)
+    """The player's real stats in that scoring period (one period = one day), or None if they recorded none."""
+    for s in entry.get("playerPoolEntry", {}).get("player", {}).get("stats", []):
+        if s.get("scoringPeriodId") == period and s.get("statSourceId", 0) == 0 and any(s.get("stats", {}).values()):
+            named = {STATS_MAP.get(k, k): v for k, v in s["stats"].items()}
+            return {k: named.get(k, 0) for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}
+    return None
 
 
 def day_lineups(league, start, end, today, team_ids, week):
-    """Each day's starting lineup per team, from ESPN's per-day rosters: {date: {team_id: {player_id: played}}}."""
+    """Each day's starting lineup per team, from ESPN's per-day rosters: {date: {team_id: {player_id: that day's stats or None}}}."""
     def one(d):
         try:
             period = league.scoringPeriodId + (d - today).days
@@ -110,7 +113,7 @@ def daily_slate(roster, team_id, start, end, today, lineups=None):
     for d in days_between(start, end):
         day = (lineups or {}).get(d, {}).get(team_id)
         if d < today and day is not None:
-            counts.append(sum(day.values()))
+            counts.append(sum(1 for v in day.values() if v))
         else:
             counts.append(sum(1 for p in roster if p.injuryStatus != "OUT" and starting(p, team_id, d, lineups) and game_dates(p, d, d)))
     return counts
@@ -132,10 +135,17 @@ def day_state(p, team_id, d, today, lineups=None):
 def planner_rows(roster, team_id, start, end, today, lineups):
     """Weekly planner rows: each player's slot, injury, season averages and status for every day of the week."""
     keep = COUNTING + ["FGM", "FGA", "FTM", "FTA"]
+    days = days_between(start, end)
+
+    def real(p, d):  # actual stats for a past day the player started and played
+        stats = (lineups or {}).get(d, {}).get(team_id, {}).get(p.playerId)
+        return stats if d < today and isinstance(stats, dict) else None
+
     return [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
              "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
              "avg": {k: season_avg(p).get(k, 0) for k in keep},
-             "days": [day_state(p, team_id, d, today, lineups) for d in days_between(start, end)]} for p in roster]
+             "days": [day_state(p, team_id, d, today, lineups) for d in days],
+             "actual": [real(p, d) for d in days]} for p in roster]
 
 
 def team_games(league, start, end):

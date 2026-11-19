@@ -59,9 +59,10 @@ assert server.daily_slate([a, b, c], 1, MON, MON + timedelta(days=6), TODAY, lu)
 rows = server.contributions([a, b, c], NOW, MON, MON + timedelta(days=6), 1, lu)
 assert [(r["name"], r["games"]) for r in rows] == [("a", 1)], rows  # only a starts Thursday and is available
 
-# played(): stats recorded in that period count; projections or empty stat lines don't
+# played(): that day's real stats, named; projections or empty stat lines don't count
 e = lambda *s: {"playerPoolEntry": {"player": {"stats": list(s)}}}
-assert server.played(e({"scoringPeriodId": 30, "statSourceId": 0, "stats": {"0": 12.0}}), 30)
+day = server.played(e({"scoringPeriodId": 30, "statSourceId": 0, "stats": {"0": 12.0, "6": 7.0, "13": 5.0, "14": 9.0, "99": 1}}), 30)
+assert day["PTS"] == 12 and day["REB"] == 7 and day["FGM"] == 5 and day["FGA"] == 9 and day["AST"] == 0 and "99" not in day, day
 assert not server.played(e({"scoringPeriodId": 30, "statSourceId": 1, "stats": {"0": 12.0}}), 30)
 assert not server.played(e({"scoringPeriodId": 30, "statSourceId": 0, "stats": {"0": 0}}), 30)
 assert not server.played(e({"scoringPeriodId": 29, "statSourceId": 0, "stats": {"0": 12.0}}), 30)
@@ -73,7 +74,7 @@ def fake_get(params, headers):
     return {"schedule": [{"home": {"teamId": 1, "rosterForCurrentScoringPeriod": {"entries": [entry(p, 0), entry(99, 12), entry(98, 13)]}}, "away": {"teamId": 2}}]}
 lg = NS(scoringPeriodId=30, currentMatchupPeriod=5, espn_request=NS(league_get=fake_get))
 got = server.day_lineups(lg, MON, MON + timedelta(days=6), TODAY, {1, 2}, 5)
-assert got[TODAY] == {1: {30: True}} and got[MON] == {1: {28: True}}, got  # today = period 30, Monday = 28
+assert set(got[TODAY][1]) == {30} and set(got[MON][1]) == {28} and got[MON][1][28]["PTS"] == 5, got  # today = period 30, Monday = 28
 pro = {1: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]},
        2: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]}}
 assert server.nba_games(NS(pro_schedule=pro), MON, MON + timedelta(days=6)) == [1, 0, 0, 0, 0, 0, 0]  # same game listed under both teams counts once
@@ -158,6 +159,9 @@ pro2 = {1: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}, {"dat
         2: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}]}}
 assert server.team_games(NS(pro_schedule=pro2), MON, sun) == {"ATL": 1, "BOS": 1}  # Nov 30 is outside the week
 assert set(d["planner"]) == {"mine", "teams", "theirs"}
+# actual stats only for past days a player started and played; None elsewhere
+lu2 = {TUE: {1: {1: {"PTS": 31}}}, THU: {1: {1: {"PTS": 99}}}}  # Thursday is not past yet
+assert server.planner_rows([a], 1, MON, sun, TODAY, lu2)[0]["actual"] == [None, {"PTS": 31}, None, None, None, None, None]
 
 # bye week: no matchup
 league.scoreboard = lambda week: []
