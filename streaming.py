@@ -46,6 +46,18 @@ def score(mine, theirs):
     return wins, margin
 
 
+def rows(players, tags=None):
+    """What each player adds to the projection: games counted and the summed stat lines (for the breakdown table)."""
+    out = []
+    for p in players:
+        tag = (tags or {}).get(p["id"])
+        if not p["games"] and not tag:
+            continue
+        name = p["name"] + (f" · {tag}" if tag else "")
+        out.append({"name": name, "games": len(p["games"]), **{k: sum(l.get(k, 0) for l in p["games"].values()) for k in KEYS}})
+    return out
+
+
 def record(res):
     return f'{sum(r == "W" for r in res.values())}-{sum(r == "L" for r in res.values())}-{sum(r == "T" for r in res.values())}'
 
@@ -117,7 +129,12 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         moves.append({"day": day, "add": {"id": fa["id"], "name": fa["name"]}, "drop": {"id": drop["id"], "name": drop["name"]},
                       "games": sorted(games)})
     end = totals(current, roster)
+    tags = {m["add"]["id"]: f"added {m['day'].strftime('%a %m/%d')}" for m in moves}
+    for m in moves:  # a streamer added and later dropped shows both
+        tags[m["drop"]["id"]] = (tags.get(m["drop"]["id"], "") + "; " if m["drop"]["id"] in tags else "") + f"dropped {m['day'].strftime('%a %m/%d')}"
     return {"moves": sorted(moves, key=lambda m: m["day"]),
+            "current": current,
+            "players": rows(roster, tags),
             "before": {"mine": start, "result": result(start, opp_totals), "record": record(result(start, opp_totals))},
             "after": {"mine": end, "result": result(end, opp_totals), "record": record(result(end, opp_totals))},
             "theirs": opp_totals}

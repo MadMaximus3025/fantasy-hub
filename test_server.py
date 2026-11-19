@@ -230,10 +230,15 @@ assert server.planner_rows([f(1, "a", [2])], 1, MON, MON + timedelta(days=6), TO
 server.fetch_gamelog = real_fetch
 
 # streaming endpoint: acquisitions left from ESPN, droppable ids validated, a free agent fills an open slot
-teams_raw = {"teams": [{"id": 1, "transactionCounter": {"matchupAcquisitionTotals": {"5": 2}}}]}
-acq_league = NS(settings=NS(matchup_acquisition_limit=4), espn_request=NS(league_get=lambda params: teams_raw))
-assert server.acquisitions_left(acq_league, 1, 5) == (4, 2, 2)
-assert server.acquisitions_left(NS(settings=NS(matchup_acquisition_limit=-1)), 1, 5) == (None, None, None)
+# acquisitions used = your FA/waiver adds dated inside the matchup, from the activity log
+ms = lambda d: datetime.combine(d, datetime.min.time()).replace(hour=15).timestamp() * 1000
+acts = [NS(date=ms(TODAY), actions=[(me, "FA ADDED", "x"), (me, "DROPPED", "y")]),
+        NS(date=ms(MON), actions=[(me, "WAIVER ADDED", "z")]),
+        NS(date=ms(MON - timedelta(days=1)), actions=[(me, "FA ADDED", "last week")]),
+        NS(date=ms(TODAY), actions=[(opp, "FA ADDED", "theirs")])]
+acq_league = NS(settings=NS(matchup_acquisition_limit=7), recent_activity=lambda size: acts)
+assert server.acquisitions_left(acq_league, me, MON, MON + timedelta(days=6)) == (7, 2, 5)
+assert server.acquisitions_left(NS(settings=NS(matchup_acquisition_limit=-1)), me, MON, MON) == (None, None, None)
 
 fa = f(50, "Free Guy", [4, 5, 6], PTS=25)  # Fri-Sun, after NOW
 scrub = f(51, "Scrub", [], slot="BE")
@@ -249,6 +254,11 @@ out = server.stream(drops="51,999,abc", plan=True)
 assert out["acquisitions"]["left"] == 2 and out["opponent"] == opp.team_name
 moves = out["plan"]["moves"]
 assert moves and moves[0]["add"]["name"] == "Free Guy (ATL)" and moves[0]["drop"]["name"] == "Scrub", moves
+# breakdown: rows + this week's totals add up to the planned totals; the pickup is labeled
+pl = out["plan"]
+assert any(r["name"].startswith("Free Guy (ATL) · added") for r in pl["players"]), pl["players"]
+assert sum(r["PTS"] for r in pl["players"]) + pl["current"].get("PTS", 0) == pl["after"]["mine"]["PTS"]
+assert sum(r["PTS"] for r in pl["opp_players"]) + pl["opp_current"].get("PTS", 0) == pl["theirs"]["PTS"]
 assert server.stream(drops="999", plan=True)["plan"]["moves"] == []  # 999 isn't on your roster, so nothing is droppable
 assert "plan" not in server.stream()  # roster + acquisitions only until you ask for a plan
 server.connect, server.free_agents, server.day_lineups, server.acquisitions_left, server.datetime = saved

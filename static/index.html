@@ -272,6 +272,12 @@ function planCard(s) {
   return `<section class="card">${head}
     <p><b>Projected ${p.before.record} → ${p.after.record}</b> (W-L-T)</p>${moves}
     <table><thead><tr><th>Cat</th><th>Now</th><th>With plan</th><th>${esc(s.opponent)}</th></tr></thead><tbody>${rows}</tbody></table>
+    <details class="breakdown" open><summary>What makes up these totals</summary>
+      <p class="muted">Each total = this week's ESPN totals so far + every counted player's season average × the games he still has (pickups and drops marked).
+        FG% and FT% come only from games still to come, because ESPN doesn't give makes and attempts so far.</p>
+      ${breakdownTable("You · with plan", p.players, p.current, p.after.mine)}
+      ${breakdownTable(s.opponent, p.opp_players, p.opp_current, p.theirs)}
+    </details>
     <p class="muted">Free-agent stats are season averages; a pickup only counts on days you have an open starting spot. Adds happen on a player's game day, before tip-off.</p></section>`;
 }
 

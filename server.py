@@ -351,17 +351,20 @@ def free_agents(league, size=60):
     return [Player(p, league.year, league.pro_schedule) for p in data.get("players", [])]
 
 
-def acquisitions_left(league, team_id, week):
-    """(weekly limit, used this matchup, left); None where ESPN doesn't say or there is no limit."""
+def acquisitions_left(league, me, first, last):
+    """(weekly limit, adds used this matchup, left); None where ESPN doesn't say or there is no limit.
+    Used = your free-agent and waiver adds dated inside the matchup, from ESPN's league activity log."""
     limit = league.settings.matchup_acquisition_limit
     if not limit or limit < 0:
         return None, None, None
     try:
-        teams = league.espn_request.league_get(params={"view": "mTeam"}).get("teams", [])
-        counter = next(t for t in teams if t["id"] == team_id).get("transactionCounter", {})
-        used = counter.get("matchupAcquisitionTotals", {}).get(str(week), 0)
+        # shortcut: reads the league's 100 latest moves; a very busy league could push older adds this week out
+        activity = league.recent_activity(size=100)
     except Exception:
         return limit, None, None
+    used = sum(1 for a in activity if first <= datetime.fromtimestamp(a.date / 1000).date() <= last
+               for team, action, *_ in a.actions
+               if getattr(team, "team_id", None) == me.team_id and action in ("FA ADDED", "WAIVER ADDED"))
     return limit, used, max(0, limit - used)
 
 
@@ -375,7 +378,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     first, last = week_dates(league, week, today)
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
     lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
-    limit, used, left = acquisitions_left(league, me.team_id, week)
+    limit, used, left = acquisitions_left(league, me, first, last)
     out = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
            "opponent": opp.team_name if opp else None,
            "acquisitions": {"limit": limit, "used": used, "left": left},
@@ -386,17 +389,20 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         return out
     roster_ids = {p.playerId for p in me.roster}
     droppable = {int(x) for x in drops.split(",") if x.strip().isdigit()} & roster_ids
+    opp_players = [{"id": p.playerId, "name": p.name, "games": game_lines(p, opp.team_id, lineups, now, first, last)} for p in opp.roster]
     out["plan"] = streaming.plan(
         days=days_between(max(today, first), last),
         slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR")),  # your starting spots
         mine=[{"id": p.playerId, "name": p.name, "games": game_lines(p, me.team_id, lineups, now, first, last)} for p in me.roster],
-        opp_totals=streaming.totals(scores(opp_cats), [{"games": game_lines(p, opp.team_id, lineups, now, first, last)} for p in opp.roster]),
+        opp_totals=streaming.totals(scores(opp_cats), opp_players),
         current=scores(my_cats),
         free_agents=[{"id": p.playerId, "name": f"{p.name} ({p.proTeam})", "lines": game_lines(p, None, lineups, now, first, last)}
                      for p in free_agents(league)],
         droppable=droppable,
         acquisitions=acq if acq is not None else (left or 0),
     )
+    out["plan"]["opp_current"] = scores(opp_cats)
+    out["plan"]["opp_players"] = streaming.rows(opp_players)
     return out
 
 
