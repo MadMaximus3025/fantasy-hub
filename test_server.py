@@ -324,6 +324,7 @@ moves = out["plan"]["moves"]
 assert moves and moves[0]["add"]["name"] == "Free Guy (ATL)" and moves[0]["drop"]["name"] == "Scrub", moves
 assert all(m["add"]["name"].split(" (")[0] == "Free Guy" for m in moves), moves  # injured / day-to-day free agents never suggested
 assert moves[0]["add"]["line"]["PTS"] == 25 and moves[0]["drop"]["line"] is not None  # per-game lines for the side-by-side view
+assert moves[0]["add"]["factor"] == 1 and moves[0]["add"]["note"] == ""
 assert server.healthy(fa) and not server.healthy(hurt_star) and not server.healthy(dtd) and not server.healthy(flagged)
 # breakdown: rows + this week's totals add up to the planned totals; the pickup is labeled
 pl = out["plan"]
@@ -357,7 +358,9 @@ def rp(season_min, recent_min, gp=4):
     return NS(year=2027, stats={"2027_total": {"avg": {"MIN": season_min, "PTS": 10}},
                                 "2027_last_7": {"avg": {"MIN": recent_min, "GP": gp}}})
 f1, why1 = server.role_factor(rp(20, 30), [], NOW)
-assert round(f1, 2) == 1.5 and "minutes 20 → 30" in why1[0], (f1, why1)
+assert round(f1, 2) == 1.5 and "minutes 20.0 → 30.0" in why1[0], (f1, why1)
+assert server.role_factor(rp(28.8, 27.6), [], NOW)[1] == ["minutes 28.8 → 27.6 (last 7 days)"]  # small changes are explained too
+assert server.role_factor(rp(28.8, 28.5), [], NOW)[1] == []  # under 3%: noise
 assert server.role_factor(rp(20, 30, gp=1), [], NOW)[0] == 1.0  # one game isn't a trend
 assert server.role_factor(rp(20, 60), [], NOW)[0] == 1.6  # capped
 fresh = {"role": 1, "headline": "Smith will start", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}
@@ -373,5 +376,6 @@ pl = __import__("streaming").plan(
      "lines": {MON + timedelta(days=4): {"PTS": 30, "REB": 9, "AST": 5, "STL": 1, "BLK": 1, "3PM": 2, "TO": -1, "FGM": 9, "FGA": 15, "FTM": 5, "FTA": 6}}}],
     {1}, 3)
 assert pl["moves"][0]["why"] == "minutes 20 → 30 (last 7 days)" and "minutes 20 → 30" in pl["players"][1]["name"], pl
+assert pl["moves"][0]["add"]["line"] is None and pl["moves"][0]["add"]["factor"] == 1  # no stat lines given: page shows blanks
 server._league["value"] = None; server._cache.clear(); server._news.clear()  # leave no fake state behind
 print("ok")

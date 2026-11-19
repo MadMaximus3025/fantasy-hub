@@ -310,8 +310,8 @@ def role_factor(p, news, now):
         avg = p.stats.get(f"{p.year}_{split}", {}).get("avg") or {}
         if season and avg.get("MIN") and (avg.get("GP") or 0) >= need:
             factor = max(0.5, min(1.6, avg["MIN"] / season))
-            if abs(factor - 1) >= 0.1:
-                why.append(f"minutes {season:.0f} → {avg['MIN']:.0f} ({split.replace('_', ' ')} days)")
+            if abs(factor - 1) >= 0.03:  # smaller changes are noise
+                why.append(f"minutes {season:.1f} → {avg['MIN']:.1f} ({split.replace('_', ' ')} days)")
             break
     for n in news:
         if not (n.get("role") and n.get("published")):  # undated news: age unknown, so it doesn't move the projection
@@ -565,8 +565,10 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         """A player for the planner, his lines scaled by role: recent minutes and role news."""
         factor, why = role_factor(p, news_items, now)
         lines = game_lines(p, team_id, lineups, now, first, last, factor)
-        per_game = {k: season_avg(p).get(k, 0) * factor for k in streaming.KEYS}  # season-long value, role-adjusted
+        season = {k: season_avg(p).get(k, 0) for k in streaming.KEYS}  # what ESPN shows, for display
+        per_game = {k: v * factor for k, v in season.items()}  # role-adjusted, what the planner uses
         return {"id": p.playerId, "name": name or p.name, "note": "; ".join(why), "per_game": per_game,
+                "season": season, "factor": round(factor, 2),
                 "games" if team_id else "lines": lines}
 
     opp_players = [entry(p, opp.team_id, []) for p in opp.roster]
