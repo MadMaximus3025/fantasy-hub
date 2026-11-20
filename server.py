@@ -635,16 +635,17 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
         pending_moves(team, rosters, today, league)
         league_order(team.roster, today)
+    keepers = [p for p in me.roster if not hasattr(p, "pending_until")]  # pending drops are gone for planning purposes
     acquisitions = acquisitions_left(league, me, first, last, week)
     out = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
            "opponent": opp.team_name if opp else None,
            "acquisitions": acquisitions,
            "roster": [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
                        "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None, "pending": getattr(p, "pending", None),
-                       "starts_left": len(game_lines(p, me.team_id, lineups, now, first, last))} for p in me.roster]}
+                       "starts_left": len(game_lines(p, me.team_id, lineups, now, first, last))} for p in keepers]}
     if not (plan and opp):
         return out
-    roster_ids = {p.playerId for p in me.roster}
+    roster_ids = {p.playerId for p in keepers}  # a player already dropped can't be dropped again
     droppable = {int(x) for x in drops.split(",") if x.strip().isdigit()} & roster_ids
     # only healthy free agents: OUT, injured reserve, day-to-day or suspended players can't be counted on to play
     fas = [p for p in free_agents(league) if healthy(p)]
@@ -667,10 +668,10 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     next_first, next_last = week_dates(league, week + 1, today)
     # games in next week's matchup; nothing for anyone OUT now, since his return date is unknown
     next_games = {p.playerId: 0 if p.injuryStatus == "OUT" else
-                  sum(next_first <= x["date"].date() <= next_last for x in p.schedule.values()) for p in me.roster + fas}
+                  sum(next_first <= x["date"].date() <= next_last for x in p.schedule.values()) for p in keepers + fas}
     out["plan"] = streaming.plan(
         days=days_between(max(today, first), last),
-        slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR")),  # your starting spots
+        slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR") and not hasattr(p, "pending_from")),  # today's starting spots
         mine=mine,
         opp_totals=streaming.totals(scores(opp_cats), opp_players),
         current=scores(my_cats),

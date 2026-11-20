@@ -376,6 +376,11 @@ assert sum(r["PTS"] for r in pl["players"]) + pl["current"].get("PTS", 0) == pl[
 assert sum(r["PTS"] for r in pl["opp_players"]) + pl["opp_current"].get("PTS", 0) == pl["theirs"]["PTS"]
 assert server.stream(drops="999", plan=True)["plan"]["moves"] == []  # 999 isn't on your roster, so nothing is droppable
 assert "plan" not in server.stream()  # roster + acquisitions only until you ask for a plan
+# a pending drop: not listed, never a drop candidate, and no starting spot added by a pending add
+scrub.pending_until, scrub.pending = TODAY, "Dropped after today"
+out2 = server.stream(drops="51", plan=True)
+assert 51 not in [r["id"] for r in out2["roster"]] and out2["plan"]["moves"] == [], out2["plan"]["moves"]
+del scrub.pending_until, scrub.pending
 server.connect, server.free_agents, server.day_lineups, server.acquisitions_left, server.datetime = saved
 
 # free agents: an entry that can't be read is skipped, the rest still come back
