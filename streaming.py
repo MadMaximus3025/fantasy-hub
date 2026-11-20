@@ -173,10 +173,13 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                         continue
                     key = (dw + VALUE_WEIGHT * dv, s[1])
                     if pick is None or key > pick[0]:
-                        pick = (key, s, dw, dv, fa, drop, day, new_roster, new_used, games)
+                        pick = (key, s, dw, dv, fa, drop, day, new_roster, new_used, games, add_games, drop_games)
         if not pick:
             break
-        _, s, dw, dv, fa, drop, day, roster, used, games = pick
+        before = totals(current, roster)
+        _, s, dw, dv, fa, drop, day, roster, used, games, add_games, drop_games = pick
+        after = totals(current, roster)
+        res_before, res_after = result(before, opp_totals), result(after, opp_totals)
         best = s
         added_on[fa["id"]] = day
         dropped.add(drop["id"])
@@ -186,7 +189,12 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         moves.append({"day": day, "add": side(fa), "drop": side(drop),
                       "games": sorted(games), "why": fa.get("note", ""),
                       "kind": "stream" if dw > 0 else "upgrade", "week": dw, "value": round(dv, 2),
-                      "next_games": next_games.get(fa["id"], 0)})
+                      "next_games": next_games.get(fa["id"], 0),
+                      # the numbers behind the move, for the "why" on each card
+                      "add_games": add_games, "drop_games": drop_games,
+                      "drop_week": sum(d >= day for d in drop["games"]), "drop_next": next_games.get(drop["id"], 0),
+                      "change": {c: after[c] - before[c] for c in CATS},  # this week's projected totals, after - before
+                      "flips": {c: [res_before[c], res_after[c]] for c in CATS if res_before[c] != res_after[c]}})
     end = totals(current, roster)
     tags = {m["add"]["id"]: f"added {m['day'].strftime('%a %m/%d')}" for m in moves}
     for m in moves:  # a streamer added and later dropped shows both

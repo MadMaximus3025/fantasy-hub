@@ -103,6 +103,7 @@ except HTTPException as e:
     assert e.status_code == 502 and "ESPN_S2" in e.detail, e.detail
 server.League = real_league
 
+server._live["injuries"] = (1e12, {"Kevin Durant"})  # ESPN's injury list (Out), pre-filled so tests stay offline
 # news: one player's failure doesn't drop the others; HTML cleaned
 def fake_news(pid):
     if pid == 2:
@@ -125,6 +126,19 @@ server._news.clear()  # news is cached per player for 10 minutes
 kept = server.player_news(NS(espn_request=NS(get_player_news=feed)), [me.roster[0]])[1]
 assert [(n["kind"], n["headline"]) for n in kept] == [("Injury", "Johnson questionable Friday"), ("Playing time", "Johnson moved to the bench"),
                                                      ("Injury", "Johnson out")], kept
+# a start filling in for a teammate who's still OUT keeps counting past the named day and the 7-day window
+server._news.clear()
+sub = lambda pid: {"news": {"feed": [{"headline": "Johnson will start Wednesday", "published": "2026-10-01T15:00:00Z",
+                                       "story": "Johnson will start in place of Kevin Durant (ankle)."}]}}
+item = server.player_news(NS(espn_request=NS(get_player_news=sub)), [me.roster[0]])[1][0]
+assert item["while_out"] == "Kevin Durant" and item["until"], item
+fac, why = server.role_factor(None, [item], datetime(2026, 11, 20))
+assert fac == 1.2 and "Kevin Durant still out" in why[0], why
+server._live["injuries"] = (1e12, set())  # Durant is back: the one-game news expires again
+server._news.clear()
+item = server.player_news(NS(espn_request=NS(get_player_news=sub)), [me.roster[0]])[1][0]
+assert item["while_out"] is None and server.role_factor(None, [item], datetime(2026, 11, 20))[0] == 1.0
+server._news.clear()
 assert server.news_kind("Scored 30 in a win. Fourth straight game with 20.") is None
 assert server.news_kind("Johnson had 20 points and 9 rebounds in 32 minutes Tuesday.") is None  # minutes in a recap isn't a role change
 assert server.news_kind("Johnson is expected to see more minutes with Young sidelined") == "Injury"  # teammate injury still matters

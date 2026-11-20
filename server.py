@@ -399,11 +399,11 @@ def role_factor(p, news, now):
     for n in news:
         if not (n.get("role") and n.get("published")):  # undated news: age unknown, so it doesn't move the projection
             continue
-        if n.get("until") and n["until"] < now.date().isoformat():
+        if n.get("until") and n["until"] < now.date().isoformat() and not n.get("while_out"):
             continue
-        if (now - local_time(n["published"])).days <= 7:
+        if n.get("while_out") or (now - local_time(n["published"])).days <= 7:  # replacement starts last until he's back
             factor *= 1.2 if n["role"] > 0 else 0.75
-            why.append(f"news: {n['headline']}")
+            why.append(f"news: {n['headline']}" + (f" ({n['while_out']} still out)" if n.get("while_out") else ""))
             break
     return factor, why
 
@@ -447,8 +447,19 @@ def player_news(league, roster):
                 items.append({"headline": tldr(n.get("headline")), "tldr": tldr(n.get("story")), "kind": news_kind(text),
                               "role": role_direction(text), "published": n.get("published") or "",
                               "until": str(role_until(text, n.get("published")) or "")})
+                items[-1]["while_out"] = filling_in(p, items[-1], text)
         _news[p.playerId] = (time.time(), items[:3])
         return p.playerId, items[:3]
+
+    try:
+        out_now = injured_out()
+    except Exception:
+        out_now = set()  # without the injury list, replacement starts expire like any one-game news
+
+    def filling_in(p, item, text):
+        """The OUT player a bigger-role item is about (e.g. 'starts in place of the injured Jones'), while he's still out."""
+        if item["role"] > 0:
+            return next((n for n in out_now if n != p.name and n in text), None)
 
     # one request per player; run them side by side instead of one after another
     with ThreadPoolExecutor(8) as pool:
@@ -830,6 +841,15 @@ def cached(key, ttl, fetch):
         for k in sorted(_live, key=lambda k: _live[k][0])[:50]:
             _live.pop(k, None)
     return value
+
+
+INJURIES_URL = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
+
+
+def injured_out():
+    """Names of every NBA player ESPN lists as Out right now (all teams), cached 10 minutes."""
+    return cached("injuries", 600, lambda: {i["athlete"]["displayName"] for t in get_json(INJURIES_URL).get("injuries", [])
+                                            for i in t.get("injuries", []) if i.get("status") == "Out"})
 
 
 def get_json(url):

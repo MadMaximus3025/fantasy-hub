@@ -220,6 +220,8 @@
   .move .meta-line { display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-2); color:var(--muted); font-size:var(--fs-sm); margin:var(--sp-1) 0 var(--sp-2); }
   .move .kind { font:800 var(--fs-xs) var(--font); letter-spacing:.5px; text-transform:uppercase; padding:2px var(--sp-2); border-radius:var(--r-pill); background:var(--accent); color:var(--on-accent); }
   .move .kind.upgrade { background:var(--you); }
+  .move-why ul { list-style:disc; margin:var(--sp-1) 0 0; padding-left:var(--sp-5, 1.25rem); color:var(--text-2); font-size:var(--fs-sm); }
+  .move-why li { margin:var(--sp-1) 0; }
   .name { font-weight:600; }
   .meta { color:var(--muted); font-size:var(--fs-xs); letter-spacing:.5px; text-transform:uppercase; }
   .tag { margin-left:auto; display:flex; gap:var(--sp-2); align-items:center; flex-wrap:wrap; justify-content:flex-end; }
@@ -655,6 +657,32 @@ function radar(a, b, aName, bName) {
     ${dots(vb, "rd-b-dot")}${dots(va, "rd-a-dot")}${labels}</svg>`;
 }
 
+// the numbers behind one pickup: games, value math, categories it flips and how this week's totals move
+function moveWhy(m) {
+  if (m.add_games == null) return "";
+  const sign = v => (v >= 0 ? "+" : "−") + Math.abs(v);
+  const name = x => esc(x.name.replace(/ \(\w+\)$/, ""));
+  const out = { W: "win", L: "lose", T: "tie" };
+  const flips = Object.entries(m.flips || {}).map(([c, [a, b]]) => `<b class="${b === "W" || a === "L" ? "pos" : "neg"}">${c}</b> ${out[a]} → ${out[b]}`);
+  const moved = CATS9.map(c => {
+    const d = (m.change || {})[c] || 0, pct = c.endsWith("%");
+    if (Math.abs(d) < (pct ? 0.0005 : 0.05)) return "";
+    const good = c === "TO" ? d < 0 : d > 0;
+    return `<span class="${good ? "pos" : "neg"}">${c} ${d > 0 ? "+" : "−"}${pct ? Math.abs(d * 100).toFixed(1) + " pts" : Math.abs(d).toFixed(1)}</span>`;
+  }).filter(Boolean);
+  const addV = m.add.value ?? 0, dropV = m.drop.value ?? 0;
+  return `<details class="breakdown move-why"><summary>Why this move</summary><ul>
+    <li><b>Games</b> (this week + next): ${name(m.add)} ${m.add_games} (${m.games.length} + ${m.next_games}) vs ${name(m.drop)} ${m.drop_games} (${m.drop_week} + ${m.drop_next}).
+      This week only counts games on days you have an open starting spot.</li>
+    <li><b>Value</b>: ${sign(addV)} per game × ${m.add_games} = ${sign(+(addV * m.add_games).toFixed(1))}, minus ${sign(dropV)} × ${m.drop_games} = ${sign(+(dropV * m.drop_games).toFixed(1))}
+      → <b class="${m.value >= 0 ? "pos" : "neg"}">${sign(m.value)}</b>. Per-game value = his 9-cat line compared with every player in the pool (0 = average).</li>
+    <li><b>This week's matchup</b>: ${flips.length ? flips.join(" · ") : "no category changes hands"}${moved.length ? `; your projected totals: ${moved.join(" · ")}` : ""}.</li>
+    ${m.add.note ? `<li><b>Projection</b>: ${esc(m.add.note)} (×${m.add.factor.toFixed(2)}).</li>` : ""}
+    <li><b>Why ${m.kind === "upgrade" ? "an upgrade" : "a stream"}</b>: ${m.kind === "upgrade"
+      ? "adds at least +2 value over this week and next without losing a category this week."
+      : "wins more categories this week while costing at most 4 value over the two weeks."}</li></ul></details>`;
+}
+
 function planCard(s) {
   const head = `<h2>Pickup plan · week ${s.week.number}${s.opponent ? ` vs ${esc(s.opponent)}` : ""}</h2>`;
   if (!s.opponent) return `<section class="card">${head}<p class="muted">Bye week: no matchup to plan for.</p></section>`;
@@ -674,7 +702,8 @@ function planCard(s) {
             <span><b>${verb} ${esc(x.name)}</b><small>${adjText(x)}</small></span>
             <b class="${x.value >= 0 ? "pos" : "neg"}">${x.value >= 0 ? "+" : ""}${(x.value ?? 0).toFixed(1)}</b></div>`).join("")}
           <p class="muted">Bigger on an axis = better there (TO: fewer). Values: <span class="rd-a">add</span> · drop.</p></div></div>
-      <div class="meta-line">This week: ${m.week > 0 ? "+" : ""}${m.week} cat${Math.abs(m.week) === 1 ? "" : "s"} · Value this week + next: ${m.value >= 0 ? "+" : ""}${m.value}</div></li>`;
+      <div class="meta-line">This week: ${m.week > 0 ? "+" : ""}${m.week} cat${Math.abs(m.week) === 1 ? "" : "s"} · Value this week + next: ${m.value >= 0 ? "+" : ""}${m.value}</div>
+      ${moveWhy(m)}</li>`;
   }).join("")}</ol>`
     : '<p class="muted">No pickup improves your projected result with these drops and adds. Try allowing more drops.</p>';
   return `<section class="card">${head}
@@ -688,7 +717,7 @@ function planCard(s) {
       ${breakdownTable("You · with plan", p.players, p.current, p.after.mine)}
       ${breakdownTable(s.opponent, p.opp_players, p.opp_current, p.theirs)}
     </details>
-    <p class="muted">Pickup cards show season averages (as on ESPN). The plan itself uses the same averages, moved by the “Projection ×” factor under a player when there's role news from the last 7 days (×1.2 bigger role, ×0.75 smaller), so a player taking over a teammate's role projects higher; a pickup only counts on days you have an open starting spot. <b>Stream</b> = wins more categories this week without dropping a clearly better player. <b>Upgrade</b> = adds clear value over the rest of this week and next week's matchup (per-game value across all 9 categories × games he plays), even if it doesn't change this week. Players with no games this week or next aren't suggested. Only healthy free agents are suggested (anyone listed OUT, day-to-day, on injured reserve or suspended is skipped). Adds happen by a player's game day, before tip-off.</p></section>`;
+    <p class="muted">Pickup cards show season averages (as on ESPN). The plan itself uses the same averages, moved by the “Projection ×” factor under a player when there's role news from the last 7 days (×1.2 bigger role, ×0.75 smaller), so a player taking over a teammate's role projects higher. News about one game stops counting once that game is played, except a start filling in for an injured teammate, which counts until ESPN no longer lists the teammate as out. Open <b>Why this move</b> on a card for the numbers behind it; a pickup only counts on days you have an open starting spot. <b>Stream</b> = wins more categories this week without dropping a clearly better player. <b>Upgrade</b> = adds clear value over the rest of this week and next week's matchup (per-game value across all 9 categories × games he plays), even if it doesn't change this week. Players with no games this week or next aren't suggested. Only healthy free agents are suggested (anyone listed OUT, day-to-day, on injured reserve or suspended is skipped). Adds happen by a player's game day, before tip-off.</p></section>`;
 }
 
 // ---- Weekly planner page (#planner) ----
