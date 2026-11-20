@@ -511,9 +511,9 @@ function accuracyView() {
   }).join("");
   return `<section class="card wide"><h2>How the projections did · your roster · ${team.games} games</h2>
       <div class="tiles">${tiles}</div>
-      <p class="muted">Each game is projected the way the site projects (season average × recent minutes), using only the player's earlier games this season, then compared with what he actually did.
+      <p class="muted">Each game is projected with the site's one recipe (season average × recent-minutes factor, minus role news, which can't be replayed), using only the player's earlier games this season, then compared with what he actually did.
         Green = beat the projection, red = fell short (TO: fewer is better). Counting stats in %, FG%/FT% in percentage points. A game counts once a player has ${history} earlier games.</p>
-      <p class="muted"><b>Why the site doesn't auto-correct from these misses:</b> we tested letting it adjust each player by his own track record (python backtest.py). It made projections slightly <i>less</i> accurate (0.669 vs 0.664), because it chases random hot and cold streaks. A player who keeps missing usually changed role, which the recent-minutes and news adjustments already pick up.</p></section>
+      <p class="muted"><b>Why the site doesn't auto-correct from these misses:</b> we tested letting it adjust each player by his own track record (python backtest.py). It made projections slightly <i>less</i> accurate (0.670 vs 0.665), because it chases random hot and cold streaks. A player who keeps missing usually changed role, which the recent-minutes and news adjustments already pick up.</p></section>
     <section class="card wide guide"><h2>By player <small class="muted">click a name for his last 10 games</small></h2>
       <div class="h2h-scroll"><table><thead><tr><th scope="col">Player</th><th scope="col">Games</th>${CATS9.map(c => `<th scope="col">${c}</th>`).join("")}</tr></thead>
       <tbody>${rows}</tbody></table></div></section>`;
@@ -807,12 +807,12 @@ function rosterGuideCard(d) {
   const head = `<tr><th scope="col">Slot</th><th scope="col">Player</th>${days.map((dt, i) => `<th scope="col" class="${i === todayIdx ? "today" : ""}">${dt.toLocaleDateString(undefined, { weekday: "short" })}<small>${i < todayIdx ? "Final" : i === todayIdx ? "Today" : dt.getDate()}</small></th>`).join("")}<th scope="col">Week${c === "Impact" ? "" : " " + c}</th></tr>`;
   const body = shown.map(r => `<tr><td>${esc(r.slot || "–")}</td><th scope="row">
         <img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-        <button class="expand" data-expand="${r.id}" aria-expanded="${planner.open.has(r.id)}">${esc(r.name)} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}${r.pending ? ` <span class="pend">${esc(r.pending)}</span>` : ""}<small>${esc(r.team)}</small></th>
+        <button class="expand" data-expand="${r.id}" aria-expanded="${planner.open.has(r.id)}">${esc(r.name)} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}${r.pending ? ` <span class="pend">${esc(r.pending)}</span>` : ""}<small>${esc(r.team)}${r.factor && Math.abs(r.factor - 1) >= 0.005 ? ` · proj ×${r.factor.toFixed(2)}` : ""}</small></th>
       ${r.days.map((s, i) => cell(r, s, i, c)).join("")}<td class="wk">${week(r, c)}</td></tr>${details(r)}`).join("");
   const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label}</option>`;
   const note = c === "Impact"
-    ? "Impact = how much a game helps across all 9 categories compared with an average player on the two rosters (0 = average). Green helps, red hurts; <b>bold</b> = an actual game, plain = his average. Week = the week's total, with his two best categories."
-    : `${c} on days a player starts: <b>bold</b> = actual stats from a past day, plain = season average. Week = actual so far + averages for starts left.`;
+    ? "Impact = how much a game helps across all 9 categories compared with an average player on the two rosters (0 = average). Green helps, red hurts; <b>bold</b> = an actual game, plain = his projection. Week = the week's total, with his two best categories."
+    : `${c} on days a player starts: <b>bold</b> = actual stats from a past day, plain = projection (season average × the player's proj factor, shown under his name when it isn't ×1.00). Week = actual so far + projections for starts left.`;
   return `<section class="card guide"><div class="slate-head"><h2>Roster guide</h2>
       <div class="picker">
         <select id="pl-roster" aria-label="Roster">${opt("mine", "Your team", planner.roster)}${d.planner.theirs ? opt("theirs", esc(d.opponent), planner.roster) : ""}</select>

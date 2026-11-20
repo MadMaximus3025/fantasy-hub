@@ -10,6 +10,7 @@ import argparse
 import json
 import pathlib
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from statistics import mean, pstdev
 from urllib.request import Request, urlopen
 
@@ -60,20 +61,26 @@ def avg(h, keys=STATS):
     return {k: mean(g[k] for g in h) for k in keys}
 
 
-def season(h):
+def season(h, when=None):
     """Season average so far."""
     return avg(h)
 
 
-def site(h):
-    """What the site does today: season average x (recent minutes / season minutes), capped 0.5-1.6.
-    'Recent' = last 3 games, about the last 7 days."""
-    season_min, recent_min = mean(g["MIN"] for g in h), mean(g["MIN"] for g in h[-3:])
-    f = max(0.5, min(1.6, recent_min / season_min)) if season_min else 1
+def site(h, when=None):
+    """The site's projection: season average x (recent minutes / season minutes), capped 0.5-1.6. 'Recent' = games in
+    the 7 days before `when` (2+ games), else 15 days (3+), like ESPN's last-7/15-day splits the live site reads."""
+    day = lambda g: date.fromisoformat(g["date"][:10])
+    ref = date.fromisoformat(when[:10]) if when else day(h[-1]) + timedelta(days=1)
+    season_min, f = mean(g["MIN"] for g in h), 1
+    for days, need in ((7, 2), (15, 3)):
+        recent = [g["MIN"] for g in h if 0 < (ref - day(g)).days <= days]
+        if season_min and len(recent) >= need:
+            f = max(0.5, min(1.6, mean(recent) / season_min))
+            break
     return {k: v * f for k, v in avg(h).items()}
 
 
-def blend(h, recent=7, w=0.4):
+def blend(h, when=None, recent=7, w=0.4):
     """Per-minute rates: 60% season, 40% last 7 games; times recent minutes (last 3 games)."""
     def rates(gs):
         mins = sum(g["MIN"] for g in gs) or 1
@@ -83,22 +90,22 @@ def blend(h, recent=7, w=0.4):
     return {k: ((1 - w) * s[k] + w * r[k]) * minutes for k in STATS}
 
 
-def last5(h):
+def last5(h, when=None):
     """Average of the last 5 games."""
     return avg(h[-5:])
 
 
-def learned(h, k=20, start=5):
+def learned(h, when=None, k=20, start=5):
     """The site model, corrected by the player's own track record: for each stat, actual / projected over his
     earlier scored games, trusted more as games add up (weight n / (n + k))."""
     proj = {key: 0.0 for key in STATS}
     got = {key: 0.0 for key in STATS}
     for j in range(start, len(h)):
-        p = site(h[:j])
+        p = site(h[:j], when=h[j]["date"])
         for key in STATS:
             proj[key] += p[key]
             got[key] += h[j][key]
-    n, base = max(0, len(h) - start), site(h)
+    n, base = max(0, len(h) - start), site(h, when)
     return {key: base[key] * (1 + ((got[key] / proj[key] - 1) if proj[key] else 0) * n / (n + k)) for key in STATS}
 
 
@@ -157,7 +164,7 @@ def main():
             for c in CATS:
                 actuals[c].append(actual[c])
             for name, method in METHODS.items():
-                pred = cats(method(log[:i]), fg, ft)
+                pred = cats(method(log[:i], when=log[i]["date"]), fg, ft)
                 for c in CATS:
                     errors[name][c].append(abs(pred[c] - actual[c]))
             for c in CATS:

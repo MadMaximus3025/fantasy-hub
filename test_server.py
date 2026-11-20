@@ -475,5 +475,22 @@ acc = server.accuracy()
 server.datetime = real_dt
 assert acc["team"]["games"] == 2 and acc["team"]["actual"]["PTS"] == 50 and acc["players"][1]["games"] == 0 and "error" in acc["players"][1]
 server.fetch_gamelog = real_log
+# one projection everywhere: season average x role factor, stored on the player, used by every page's numbers
+riser = f(80, "Riser", [3], PTS=20, MIN=20)
+riser.stats["2027_last_7"] = {"avg": {"MIN": 30, "GP": 3}}
+server.project_players([riser], {}, NOW)
+assert riser.proj_factor == 1.5 and riser.proj["PTS"] == 30 and "minutes 20.0 → 30.0" in riser.proj_why
+assert server.contributions([riser], NOW, MON, MON + timedelta(days=6))[0]["PTS"] == 30          # dashboard projection
+assert server.planner_rows([riser], 1, MON, MON + timedelta(days=6), TODAY, None)[0]["avg"]["PTS"] == 30  # planner
+assert server.planner_rows([riser], 1, MON, MON + timedelta(days=6), TODAY, None)[0]["season"]["PTS"] == 20
+hurt = f(81, "Hurt", [3], injury="OUT", PTS=20, MIN=20); hurt.stats["2027_last_7"] = {"avg": {"MIN": 30, "GP": 3}}
+server.project_players([hurt], {}, NOW)
+assert server.availability([hurt], NOW, MON, MON + timedelta(days=6), 1, None)[0]["line"]["PTS"] == 30  # who-plays toggle
+
+# accuracy replay: recent minutes = games in the 7 days before the game (2+ games), else 15 days (3+)
+bt = __import__("backtest")
+hist = [{"date": f"2026-11-{d:02d}", "MIN": m, **{k: 10.0 for k in bt.STATS}} for d, m in [(1, 30), (3, 30), (5, 30), (14, 40), (16, 40)]]
+assert bt.site(hist, when="2026-11-18")["PTS"] == 10 * 40 / 34  # Nov 14 + 16 in the last 7 days
+assert bt.site(hist[:3], when="2026-11-18")["PTS"] == 10  # nothing in the last 7 or 15 days with enough games: season average
 server._league["value"] = None; server._cache.clear(); server._news.clear()  # leave no fake state behind
 print("ok")

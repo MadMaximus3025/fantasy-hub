@@ -208,7 +208,8 @@ def planner_rows(roster, team_id, start, end, today, lineups):
 
     return [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
              "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None, "pending": getattr(p, "pending", None),
-             "avg": {k: season_avg(p).get(k, 0) for k in keep},
+             "avg": {k: proj_avg(p).get(k, 0) for k in keep},  # projection (what every page uses)
+             "season": {k: season_avg(p).get(k, 0) for k in keep}, "factor": getattr(p, "proj_factor", 1), "why": getattr(p, "proj_why", ""),
              "days": [day_state(p, team_id, d, today, lineups) for d in days],
              "actual": [real(p, d) for d in days],
              "opps": [next((g["team"] for g in p.schedule.values() if g["date"].date() == d), None) for d in days]}
@@ -270,7 +271,7 @@ def availability(roster, now, start, end, team_id=None, lineups=None):
             continue
         g = starts_left(p, now, start, end, team_id, lineups)
         if g:
-            avg = season_avg(p)
+            avg = proj_avg(p)
             rows.append({"id": p.playerId, "name": p.name, "status": p.injuryStatus, "games": g, "counted": p.injuryStatus != "OUT",
                          "line": {k: avg.get(k, 0) * g for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
     return rows
@@ -285,7 +286,7 @@ def contributions(roster, now, start, end, team_id=None, lineups=None):
         g = starts_left(p, now, start, end, team_id, lineups)
         if not g:
             continue
-        avg = season_avg(p)
+        avg = proj_avg(p)
         rows.append({"name": p.name, "games": g, **{k: avg.get(k, 0) * g for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
     return rows
 
@@ -388,6 +389,20 @@ def role_factor(p, news, now):
     return factor, why
 
 
+def project_players(players, news, now):
+    """The site's one projection recipe, stored on each player for every page to use:
+    per-game line = ESPN season average x role factor (recent minutes, plus role news when we have it)."""
+    for p in players:
+        factor, why = role_factor(p, news.get(p.playerId, []), now)
+        avg = season_avg(p)
+        p.proj, p.proj_factor, p.proj_why = {k: avg.get(k, 0) * factor for k in streaming.KEYS}, round(factor, 2), "; ".join(why)
+
+
+def proj_avg(p):
+    """A player's projected per-game line (season average when project_players hasn't run for him)."""
+    return getattr(p, "proj", None) or {k: season_avg(p).get(k, 0) for k in streaming.KEYS}
+
+
 def news_kind(text):
     """'Injury' or 'Playing time' when a news item matters for whether or how much a player plays; None otherwise."""
     return "Injury" if INJURY_WORDS.search(text) else "Playing time" if ROLE_WORDS.search(text) else None
@@ -443,6 +458,9 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
     for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
         pending_moves(team, rosters, today, league)
         league_order(team.roster, today)
+    project_players(me.roster, news, now)
+    if opp:
+        project_players(opp.roster, {}, now)  # opponent: recent minutes only
 
     def player_row(p):
         return {
@@ -546,12 +564,12 @@ def start_build(week, fresh=False):
         build_full(week, fresh)
 
 
-def game_lines(p, team_id, lineups, now, first, last, scale=1.0):
-    """{date: season-average line x scale} for p's games not started yet this week; with a team_id, only days p starts."""
+def game_lines(p, team_id, lineups, now, first, last):
+    """{date: projected line} for p's games not started yet this week; with a team_id, only days p starts."""
     if p.injuryStatus == "OUT":
         return {}
-    avg = season_avg(p)
-    line = {k: avg.get(k, 0) * scale for k in streaming.KEYS}
+    avg = proj_avg(p)
+    line = {k: avg.get(k, 0) for k in streaming.KEYS}
     return {x["date"].date(): line for x in p.schedule.values()
             if now < x["date"] and first <= x["date"].date() <= last
             and (team_id is None or starting(p, team_id, x["date"].date(), lineups))}
@@ -651,15 +669,15 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     # only healthy free agents: OUT, injured reserve, day-to-day or suspended players can't be counted on to play
     fas = [p for p in free_agents(league) if healthy(p)]
     news = player_news(league, me.roster + fas)  # opponent: recent minutes only, saving ~15 news requests
+    project_players(me.roster + fas, news, now)
+    project_players(opp.roster, {}, now)
 
     def entry(p, team_id, news_items, name=None):
         """A player for the planner, his lines scaled by role: recent minutes and role news."""
-        factor, why = role_factor(p, news_items, now)
-        lines = game_lines(p, team_id, lineups, now, first, last, factor)
+        lines = game_lines(p, team_id, lineups, now, first, last)
         season = {k: season_avg(p).get(k, 0) for k in streaming.KEYS}  # what ESPN shows, for display
-        per_game = {k: v * factor for k, v in season.items()}  # role-adjusted, what the planner uses
-        return {"id": p.playerId, "name": name or p.name, "note": "; ".join(why), "per_game": per_game,
-                "season": season, "factor": round(factor, 2),
+        return {"id": p.playerId, "name": name or p.name, "note": p.proj_why, "per_game": proj_avg(p),
+                "season": season, "factor": p.proj_factor,
                 "games" if team_id else "lines": lines}
 
     opp_players = [entry(p, opp.team_id, []) for p in opp.roster]
@@ -865,17 +883,17 @@ def track_record(log):
     """Replay one player's season: before each game, what the site's model would have projected from his earlier
     games, next to what he actually did. Returns (totals projected, totals actual, games scored, last 10 games)."""
     games = sorted((g for g in log if (g["stats"].get("MIN") or "0") not in ("0", "", "-")), key=lambda g: g["date"])
-    lines = [stat_line(g) for g in games]
+    lines = [stat_line(g) | {"date": g["date"]} for g in games]
     proj_tot = {k: 0.0 for k in backtest.STATS}
     act_tot = {k: 0.0 for k in backtest.STATS}
     recent = []
     for i in range(ACCURACY_HISTORY, len(lines)):
-        proj = backtest.site(lines[:i])
+        proj = backtest.site(lines[:i], when=games[i]["date"])
         for k in backtest.STATS:
             proj_tot[k] += proj[k]
             act_tot[k] += lines[i][k]
         recent.append({"date": games[i]["date"], "opp": games[i]["opp"], "at": games[i]["at"], "result": games[i]["result"],
-                       "proj": {k: round(proj[k], 2) for k in backtest.STATS}, "actual": lines[i]})
+                       "proj": {k: round(proj[k], 2) for k in backtest.STATS}, "actual": {k: lines[i][k] for k in backtest.STATS}})
     return proj_tot, act_tot, len(recent), recent[-10:][::-1]
 
 
