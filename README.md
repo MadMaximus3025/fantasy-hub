@@ -33,3 +33,13 @@ Data is cached for 5 minutes; the Refresh button forces a reload.
 python test_server.py
 python test_streaming.py
 ```
+
+## Projection accuracy check
+
+```bash
+python backtest.py
+```
+
+Replays real games from ESPN game logs: each method predicts a player's line from his earlier games only, then
+it's compared with what happened. Prints the average miss per category and an overall score (lower is better).
+Downloads are cached in `.backtest_cache/`.
