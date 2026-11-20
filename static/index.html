@@ -57,10 +57,12 @@
   .mc-v { font:600 var(--fs-md) var(--font-num); } .mc-v.you { text-align:right; }
   .mc-labels .mc-key { text-align:center; text-transform:none; letter-spacing:0; font-weight:400; }
   .mc-v small { display:block; font:var(--fs-xs) var(--font); color:var(--muted); }
-  .mc-bar { position:relative; height:22px; }
+  .mc-bar { position:relative; height:26px; }
   .mc-bar::before { content:""; position:absolute; left:0; right:0; top:50%; border-top:1px solid var(--line); }
-  .mc-fill { position:absolute; top:6px; height:10px; border-radius:5px; }
+  .mc-fill { position:absolute; top:5px; height:10px; border-radius:5px; }
   .mc-fill.you { background:var(--you); } .mc-fill.opp { background:var(--opp); }
+  .mc-proj { position:absolute; top:18px; height:3px; border-radius:2px; opacity:.45; }
+  .mc-proj.you { background:var(--you); } .mc-proj.opp { background:var(--opp); }
   .mc-cat { position:absolute; left:50%; top:50%; transform:translate(-50%, -50%); font:700 var(--fs-xs) var(--font); background:var(--card); border:1px solid var(--line); border-radius:var(--r-pill); padding:1px 8px; }
   .mc-p { font:700 var(--fs-sm) var(--font-num); text-align:right; } .mc-p.mid { color:var(--accent); }
   .tiles3 { display:grid; grid-template-columns:repeat(3, 1fr); gap:var(--sp-2); margin-bottom:var(--sp-3); }
@@ -366,10 +368,16 @@ function matchupCard(d) {
   const o = matchupOdds(d), pc = x => `${Math.round(x * 100)}%`;
   const final = days.filter(dt => dt < today).length;
   const cats = CATS9.map(c => {
-    const pr = o.prob[c], lean = (pr - 0.5) * 2;  // -1 they're sure to win … +1 you are
+    const pr = o.prob[c];
     const now = d.projection.current, lead = now.result[c];  // actual totals so far this week, from ESPN
+    // lead as a share of the bigger total (FG%/FT%: a 5-point lead fills the bar), -1 theirs … +1 yours; TO: fewer leads
+    const margin = (a, b) => {
+      let m = c.endsWith("%") ? (a - b) / 0.05 : (a - b) / (Math.max(Math.abs(a), Math.abs(b)) || 1);
+      return Math.max(-1, Math.min(1, c === "TO" ? -m : m));
+    };
+    const line = (m, cls) => `<span class="${cls} ${m >= 0 ? "you" : "opp"}" style="${m >= 0 ? "right:50%" : "left:50%"};width:${Math.abs(m) * 50}%"></span>`;
     return `<div class="mc-row"><span class="mc-v you">${fmt(c, o.mine[c])}<small class="${lead === "W" ? "pos" : ""}">act. ${fmt(c, now.mine[c] || 0)}</small></span>
-      <span class="mc-bar"><span class="mc-fill ${lean >= 0 ? "you" : "opp"}" style="${lean >= 0 ? "right:50%" : "left:50%"};width:${Math.abs(lean) * 50}%"></span><span class="mc-cat">${c}</span></span>
+      <span class="mc-bar">${line(margin(now.mine[c] || 0, now.theirs[c] || 0), "mc-fill")}${line(margin(o.mine[c], o.theirs[c]), "mc-proj")}<span class="mc-cat">${c}</span></span>
       <span class="mc-v opp">${fmt(c, o.theirs[c])}<small class="${lead === "L" ? "neg" : ""}">act. ${fmt(c, now.theirs[c] || 0)}</small></span><span class="mc-p ${pr >= 0.65 ? "pos" : pr <= 0.35 ? "neg" : "mid"}">${pc(pr)}</span></div>`;
   }).join("");
   const av = d.projection.availability || { mine: [], theirs: [] };
@@ -390,7 +398,7 @@ function matchupCard(d) {
   return `<section class="card wide matchup">${head}<div class="mc-grid"><div>
       <div class="mc-big"><span class="num">${o.expected.toFixed(1)}</span><span>of 9 categories expected</span></div>
       <p class="mc-sub">vs <b>${esc(d.opponent)}</b> ${(9 - o.expected).toFixed(1)} · <b class="${o.win >= 0.5 ? "pos" : "neg"}">${pc(o.win)}</b> to take more categories · ${final} of ${days.length} nights final · right now <b>${tally(d.projection.current.result).join("-")}</b></p>
-      <div class="mc-labels"><span>You</span><span class="mc-key">big = projected end · small = act. (actual so far)</span><span>${esc(d.opponent)}</span><span>Win %</span></div>
+      <div class="mc-labels"><span>You</span><span class="mc-key">thick line = actual lead · thin = projected end · numbers: big = projected, act. = actual</span><span>${esc(d.opponent)}</span><span>Win %</span></div>
       ${cats}
       <details class="breakdown"><summary>Per-player breakdown</summary>
         <p class="muted">Starters in your set ESPN lineup: season average × games not started yet, added to this week's totals so far. Plays/Sits toggles aren't reflected here.</p>
