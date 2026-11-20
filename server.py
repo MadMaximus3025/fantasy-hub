@@ -410,6 +410,8 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
     first, last = week_dates(league, week, today)
     left_from = max(today, first)  # games still to come in the selected week (none for a past week)
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
+    for team in (me, opp) if opp else (me,):  # same roster order on every page
+        league_order(team.roster, today)
 
     def player_row(p):
         return {
@@ -527,6 +529,19 @@ def healthy(p):
     return p.injuryStatus in (None, "", "ACTIVE", "NORMAL") and not getattr(p, "injured", False)
 
 
+SLOT_ORDER = ["PG", "SG", "SF", "PF", "C", "G", "F", "SG/SF", "G/F", "PF/C", "F/C", "UT", "BE", "IR"]
+
+
+def league_order(roster, today):
+    """Sort a roster in place like the league shows it: starters playing today, other starters, healthy bench,
+    injured (day-to-day/out) bench, then IR; ESPN's slot order (PG, SG, ..., UT) within each group."""
+    def key(p):
+        slot = p.lineupSlot
+        group = 4 if slot == "IR" else (2 if healthy(p) else 3) if slot == "BE" else 0 if game_dates(p, today, today) else 1
+        return group, SLOT_ORDER.index(slot) if slot in SLOT_ORDER else len(SLOT_ORDER)
+    roster.sort(key=key)
+
+
 def free_agents(league, size=60):
     """Most-owned free agents (not waivers: those can't be added the same day), with their NBA schedule attached."""
     filters = {"players": {"filterStatus": {"value": ["FREEAGENT"]}, "limit": size,
@@ -584,6 +599,8 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     today, week = now.date(), league.currentMatchupPeriod
     first, last = week_dates(league, week, today)
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
+    for team in (me, opp) if opp else (me,):  # same roster order on every page
+        league_order(team.roster, today)
     lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
     acquisitions = acquisitions_left(league, me, first, last, week)
     out = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},

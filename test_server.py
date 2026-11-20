@@ -38,7 +38,7 @@ assert server.find_my_team(league, "2", None) is opp
 d = server.build_dashboard(league, me, NOW, {1: [{"headline": "h", "story": "s"}]})
 assert d["slate"]["mine"] == [1, 1, 1, 1, 1, 1, 1], d["slate"]  # OUT player excluded
 assert d["slate"]["theirs"] == [0, 0, 1, 1, 1, 1, 1]
-assert [p["games_left"] for p in d["roster"]] == [3, 2, 3]
+assert [p["games_left"] for p in d["roster"]] == [3, 3, 2]  # league order: Hurt Guy plays today (Wed), Booker does not
 # Remaining (Wed-Sun): Johnson 3 games + Booker 2 = 5 games x 22 + current 50
 assert d["projection"]["mine"]["PTS"] == 5 * 22 + 50
 assert d["projection"]["theirs"]["PTS"] == 5 * 10
@@ -212,6 +212,13 @@ pro2 = {1: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}, {"dat
         2: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}]}}
 assert server.team_games(NS(pro_schedule=pro2), MON, sun) == {"ATL": [0, 1, 0, 0, 0, 0, 0], "BOS": [0, 1, 0, 0, 0, 0, 0]}  # Nov 30 is outside the week
 assert set(d["planner"]) == {"mine", "teams", "theirs"}
+# roster order: starters with a game today, other starters, healthy bench, injured bench, IR; slot order inside
+ro = [f(1, "ir", [2], slot="IR"), f(2, "be-out", [2], injury="OUT", slot="BE"), f(3, "be", [2], slot="BE"),
+      f(4, "c-off", [3], slot="C"), f(5, "pg-today", [2], slot="PG"), f(6, "ut-today", [2], slot="UT"), f(7, "c-today", [2], slot="C"),
+      f(8, "be-dtd", [], injury="DAY_TO_DAY", slot="BE")]
+server.league_order(ro, TODAY)
+assert [x.name for x in ro] == ["pg-today", "c-today", "ut-today", "c-off", "be", "be-out", "be-dtd", "ir"], [x.name for x in ro]
+assert [r["name"] for r in d["roster"]] == ["Jalen Johnson", "Hurt Guy", "Devin Booker"]  # Booker has no game today (Wed)
 # availability: OUT / day-to-day players with starts left, their remaining line, and whether they're counted now
 av = server.availability([f(1, "a", [3, 5]), f(2, "b", [4], injury="OUT"), f(3, "c", [5], injury="DAY_TO_DAY"),
                           f(4, "d", [], injury="OUT"), f(5, "e", [4], injury="OUT", slot="BE")], NOW, MON, MON + timedelta(days=6), 1, None)
