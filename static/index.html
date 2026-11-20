@@ -369,16 +369,16 @@ function matchupCard(d) {
   const final = days.filter(dt => dt < today).length;
   const cats = CATS9.map(c => {
     const pr = o.prob[c];
-    const now = d.projection.current, lead = now.result[c];  // actual totals so far this week, from ESPN
+    const now = d.projection.current;  // actual totals so far this week, from ESPN
     // lead as a share of the bigger total (FG%/FT%: a 5-point lead fills the bar), -1 theirs … +1 yours; TO: fewer leads
     const margin = (a, b) => {
       let m = c.endsWith("%") ? (a - b) / 0.05 : (a - b) / (Math.max(Math.abs(a), Math.abs(b)) || 1);
       return Math.max(-1, Math.min(1, c === "TO" ? -m : m));
     };
     const line = (m, cls) => `<span class="${cls} ${m >= 0 ? "you" : "opp"}" style="${m >= 0 ? "right:50%" : "left:50%"};width:${Math.abs(m) * 50}%"></span>`;
-    return `<div class="mc-row"><span class="mc-v you">${fmt(c, o.mine[c])}<small class="${lead === "W" ? "pos" : ""}">act. ${fmt(c, now.mine[c] || 0)}</small></span>
+    return `<div class="mc-row"><span class="mc-v you">${fmt(c, now.mine[c] || 0)}<small>proj. ${fmt(c, o.mine[c])}</small></span>
       <span class="mc-bar">${line(margin(now.mine[c] || 0, now.theirs[c] || 0), "mc-fill")}${line(margin(o.mine[c], o.theirs[c]), "mc-proj")}<span class="mc-cat">${c}</span></span>
-      <span class="mc-v opp">${fmt(c, o.theirs[c])}<small class="${lead === "L" ? "neg" : ""}">act. ${fmt(c, now.theirs[c] || 0)}</small></span><span class="mc-p ${pr >= 0.65 ? "pos" : pr <= 0.35 ? "neg" : "mid"}">${pc(pr)}</span></div>`;
+      <span class="mc-v opp">${fmt(c, now.theirs[c] || 0)}<small>proj. ${fmt(c, o.theirs[c])}</small></span><span class="mc-p ${pr >= 0.65 ? "pos" : pr <= 0.35 ? "neg" : "mid"}">${pc(pr)}</span></div>`;
   }).join("");
   const av = d.projection.availability || { mine: [], theirs: [] };
   const who = (rows, label) => `<div class="who"><h3>${label}</h3>${rows.length ? rows.map(a => `<div class="who-row">
@@ -398,7 +398,7 @@ function matchupCard(d) {
   return `<section class="card wide matchup">${head}<div class="mc-grid"><div>
       <div class="mc-big"><span class="num">${o.expected.toFixed(1)}</span><span>of 9 categories expected</span></div>
       <p class="mc-sub">vs <b>${esc(d.opponent)}</b> ${(9 - o.expected).toFixed(1)} · <b class="${o.win >= 0.5 ? "pos" : "neg"}">${pc(o.win)}</b> to take more categories · ${final} of ${days.length} nights final · right now <b>${tally(d.projection.current.result).join("-")}</b></p>
-      <div class="mc-labels"><span>You</span><span class="mc-key">thick line = actual lead · thin = projected end · numbers: big = projected, act. = actual</span><span>${esc(d.opponent)}</span><span>Win %</span></div>
+      <div class="mc-labels"><span>You</span><span class="mc-key">big number + thick line = actual so far · proj. + thin line = projected end</span><span>${esc(d.opponent)}</span><span>Win %</span></div>
       ${cats}
       <details class="breakdown"><summary>Per-player breakdown</summary>
         <p class="muted">Starters in your set ESPN lineup: season average × games not started yet, added to this week's totals so far. Plays/Sits toggles aren't reflected here.</p>
