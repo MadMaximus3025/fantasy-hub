@@ -290,7 +290,7 @@ log = {"labels": labels, "events": dict([ev("1", "NY", "03-01"), ev("2", "NY", "
        ]}
 g = [x for x in server.parse_gamelog(log) if x["opp"] == "NYK"]
 assert [x["date"] for x in g] == ["2026-04-20", "2026-03-01"], g
-assert g[0]["stats"] == {"FG%": "7-15", "FT%": "5-5", "3PM": "2", "PTS": "21", "REB": "8", "AST": "6", "STL": "0", "BLK": "1", "TO": "3"}
+assert g[0]["stats"] == {"MIN": "30", "FG%": "7-15", "FT%": "5-5", "3PM": "2", "PTS": "21", "REB": "8", "AST": "6", "STL": "0", "BLK": "1", "TO": "3"}
 
 # vs endpoint: only roster players, cached parsed games, newest 3, bad team rejected
 from fastapi import HTTPException
@@ -320,7 +320,7 @@ log = [{"date": "2026-11-18", "opp": "OKC", "stats": {"FG%": "6-14", "FT%": "3-4
 server.fetch_gamelog = lambda pid, season: log if pid == 1 else []
 lu3 = {TODAY: {1: {1: None, 2: None}}, TODAY + timedelta(days=2): {1: {1: None}}}
 server.fill_actuals(lu3, TODAY)
-assert lu3[TODAY][1][1] == {"FGM": 6, "FGA": 14, "FTM": 3, "FTA": 4, "PTS": 16, "REB": 9, "AST": 7, "STL": 1, "BLK": 0, "3PM": 1, "TO": 2}, lu3
+assert lu3[TODAY][1][1] == {"MIN": 0, "FGM": 6, "FGA": 14, "FTM": 3, "FTA": 4, "PTS": 16, "REB": 9, "AST": 7, "STL": 1, "BLK": 0, "3PM": 1, "TO": 2}, lu3
 assert lu3[TODAY][1][2] is None and lu3[TODAY + timedelta(days=2)][1][1] is None  # no log for player 2; Friday is in the future
 assert server.planner_rows([f(1, "a", [2])], 1, MON, MON + timedelta(days=6), TODAY, lu3)[0]["actual"][2]["PTS"] == 16  # today's finished game shows
 server.fetch_gamelog = real_fetch
@@ -454,5 +454,26 @@ except HTTPException as e:
     assert e.status_code == 404
 server.get_json, server.fetch_gamelog = real_get, real_log
 server._live.clear()
+# accuracy page: replay a season; each game projected from earlier games only; DNPs skipped
+glog = [{"date": f"2026-11-{d:02d}", "opp": "BOS", "at": "vs", "result": "W",
+         "stats": {"MIN": str(mn), "FG%": "5-10", "FT%": "2-2", "3PM": "1", "PTS": str(pts), "REB": "5", "AST": "3", "STL": "1", "BLK": "0", "TO": "2"}}
+        for d, mn, pts in [(1, 30, 10), (2, 30, 10), (3, 30, 10), (4, 30, 10), (5, 30, 10), (6, 30, 20), (7, 0, 0), (8, 30, 30)]]
+proj_t, act_t, n, recent = server.track_record(glog)
+assert n == 2 and act_t["PTS"] == 50 and abs(proj_t["PTS"] - (10 + 70 / 6)) < 1e-9, (n, act_t["PTS"], proj_t["PTS"])  # 7th (0 min) skipped
+assert recent[0]["date"] == "2026-11-08" and recent[0]["proj"]["PTS"] == round(70 / 6, 2) and recent[0]["actual"]["PTS"] == 30
+server._cache.clear()
+try:
+    server.accuracy(); assert False
+except HTTPException as e:
+    assert e.status_code == 409  # needs the roster from a dashboard load
+server._cache[None] = {"at": _t.time(), "partial": False, "data": {"roster": [{"id": 1, "name": "a", "team": "ATL"}, {"id": 2, "name": "b", "team": "ATL"}]}}
+real_log = server.fetch_gamelog
+server.fetch_gamelog = lambda pid, season: glog if pid == 1 else (_ for _ in ()).throw(OSError("404"))
+real_dt = server.datetime
+server.datetime = type("D", (datetime,), {"now": classmethod(lambda c, tz=None: datetime(2026, 11, 20, 12) if tz is None else real_dt.now(tz))})
+acc = server.accuracy()
+server.datetime = real_dt
+assert acc["team"]["games"] == 2 and acc["team"]["actual"]["PTS"] == 50 and acc["players"][1]["games"] == 0 and "error" in acc["players"][1]
+server.fetch_gamelog = real_log
 server._league["value"] = None; server._cache.clear(); server._news.clear()  # leave no fake state behind
 print("ok")

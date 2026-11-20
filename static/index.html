@@ -239,6 +239,9 @@
   .last3 caption { text-align:left; font:700 var(--fs-xs) var(--font); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; padding:var(--sp-1) 0; }
   .last3 th small, .last3 td small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
   .pend { font:700 var(--fs-xs) var(--font); color:var(--accent); border:1px solid var(--accent); border-radius:var(--r-pill); padding:1px 8px; white-space:nowrap; }
+  .acc-games td, .acc-games th { white-space:nowrap; text-align:right; }
+  .acc-games th[scope=row] { text-align:left; }
+  .acc-games small, .guide th small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
   .news .tag { font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--loss); }
   .games { list-style:none; margin:var(--sp-1) 0; padding:0; display:flex; flex-wrap:wrap; gap:var(--sp-1); }
   .games li { font-size:var(--fs-sm); color:var(--text-2); }
@@ -296,7 +299,7 @@
 <header>
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
-    <nav class="nav-row" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#streaming">Streaming</a><button id="refresh" class="ghost">Refresh</button></nav>
+    <nav class="nav-row" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -458,6 +461,64 @@ async function loadLive(id) {
   if (liveData[id]?.today?.state === "in" && openPlayer !== null && lastData?.roster[openPlayer]?.id === id)
     liveTimer = setTimeout(() => openPlayer !== null && lastData?.roster[openPlayer]?.id === id && loadLive(id), 60000);
 }
+
+// ---- Accuracy page (#accuracy): projected vs actual, game by game ----
+const acc = { data: null, loading: false, error: null, open: new Set() };
+
+async function loadAccuracy() {
+  acc.loading = true;
+  try {
+    const r = await fetch("/api/accuracy");
+    const j = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));
+    if (!r.ok) throw new Error(j.detail);
+    acc.data = j; acc.error = null;
+  } catch (e) { acc.error = e.message; }
+  acc.loading = false;
+  if (location.hash === "#accuracy" && lastData) render(lastData);
+}
+
+// one category from summed totals: counting stats as totals, FG%/FT% as makes ÷ attempts
+const accVal = (t, c) => c === "FG%" ? (t.FGA ? t.FGM / t.FGA : 0) : c === "FT%" ? (t.FTA ? t.FTM / t.FTA : 0) : t[c] || 0;
+// how the actual result compared with the projection: % for counting stats, percentage points for FG%/FT%
+function accDiff(c, proj, act) {
+  const p = accVal(proj, c), a = accVal(act, c);
+  const d = c.endsWith("%") ? (a - p) * 100 : p ? (a / p - 1) * 100 : 0;
+  const good = c === "TO" ? d < 0 : d > 0;
+  const text = `${d > 0 ? "+" : ""}${d.toFixed(1)}${c.endsWith("%") ? " pts" : "%"}`;
+  return `<span class="${Math.abs(d) < (c.endsWith("%") ? 0.5 : 2) ? "" : good ? "pos" : "neg"}">${text}</span>`;
+}
+
+function accuracyView() {
+  if (!acc.data) {
+    if (!acc.loading && !acc.error) loadAccuracy();
+    return `<section class="card wide">${acc.error ? `<p class="error">Could not load: ${esc(acc.error)}</p>` : '<p class="muted">Replaying your players\' games…</p>'}</section>`;
+  }
+  const { team, players, history } = acc.data;
+  const tiles = CATS9.map(c => `<div class="tile"><div class="t-top"><span>${c}</span></div>
+      <div class="t-val">${accDiff(c, team.proj, team.actual)}</div>
+      <div class="t-imp">projected ${fmt(c, accVal(team.proj, c))} · actual ${fmt(c, accVal(team.actual, c))}</div></div>`).join("");
+  const rows = players.map(pl => {
+    const open = acc.open.has(pl.id);
+    const games = !open || !pl.games ? "" : `<tr class="panel-row"><td colspan="${CATS9.length + 2}"><div class="h2h-scroll"><table class="acc-games">
+        <thead><tr><th scope="col">Game</th>${CATS9.map(c => `<th scope="col">${c}</th>`).join("")}</tr></thead><tbody>
+        ${pl.recent.map(g => `<tr><th scope="row">${gameDay(g.date)}<small>${esc(g.at)} ${esc(g.opp)} ${esc(g.result)}</small></th>
+          ${CATS9.map(c => { const pv = accVal(g.proj, c), av = accVal(g.actual, c), better = c === "TO" ? av < pv : av > pv;
+            return `<td><b class="${Math.abs(av - pv) < 1e-9 ? "" : better ? "pos" : "neg"}">${fmt1(c, av)}</b><small>proj. ${fmt1(c, pv)}</small></td>`; }).join("")}</tr>`).join("")}
+        </tbody></table></div></td></tr>`;
+    return `<tr><th scope="row"><img class="pic sm" src="${headshot(pl.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+        <button class="expand" data-acc="${pl.id}" aria-expanded="${open}" ${pl.games ? "" : "disabled"}>${esc(pl.name)}</button><small>${esc(pl.team)}</small></th>
+      <td>${pl.games || "—"}</td>${CATS9.map(c => `<td>${pl.games ? accDiff(c, pl.proj, pl.actual) : "—"}</td>`).join("")}</tr>${games}`;
+  }).join("");
+  return `<section class="card wide"><h2>How the projections did · your roster · ${team.games} games</h2>
+      <div class="tiles">${tiles}</div>
+      <p class="muted">Each game is projected the way the site projects (season average × recent minutes), using only the player's earlier games this season, then compared with what he actually did.
+        Green = beat the projection, red = fell short (TO: fewer is better). Counting stats in %, FG%/FT% in percentage points. A game counts once a player has ${history} earlier games.</p>
+      <p class="muted"><b>Why the site doesn't auto-correct from these misses:</b> we tested letting it adjust each player by his own track record (python backtest.py). It made projections slightly <i>less</i> accurate (0.669 vs 0.664), because it chases random hot and cold streaks. A player who keeps missing usually changed role, which the recent-minutes and news adjustments already pick up.</p></section>
+    <section class="card wide guide"><h2>By player <small class="muted">click a name for his last 10 games</small></h2>
+      <div class="h2h-scroll"><table><thead><tr><th scope="col">Player</th><th scope="col">Games</th>${CATS9.map(c => `<th scope="col">${c}</th>`).join("")}</tr></thead>
+      <tbody>${rows}</tbody></table></div></section>`;
+}
+const fmt1 = (c, v) => c.endsWith("%") ? (v ? v.toFixed(3).replace(/^0/, "") : "—") : (Math.round(v * 10) / 10).toString();
 
 function rosterCard(d) {
   const rows = d.roster.map((p, i) => `
@@ -819,10 +880,10 @@ let lastData = null;
 
 function render(d) {
   lastData = d;
-  const page = ["#planner", "#streaming"].includes(location.hash) ? location.hash : "#";
+  const page = ["#planner", "#streaming", "#accuracy"].includes(location.hash) ? location.hash : "#";
   $("#app").classList.toggle("planner", page !== "#");
   document.querySelectorAll(".nav-row a").forEach(a => a.getAttribute("href") === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
-  $("#app").innerHTML = page === "#planner" ? plannerView(d) : page === "#streaming" ? streamView()
+  $("#app").innerHTML = page === "#planner" ? plannerView(d) : page === "#streaming" ? streamView() : page === "#accuracy" ? accuracyView()
     : matchupCard(d) + rosterCard(d);
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
@@ -832,7 +893,7 @@ let loadGen = 0;  // newer loads cancel older ones' follow-up checks
 async function load(refresh = false, poll = 0) {
   const gen = poll ? loadGen : ++loadGen;
   if (!poll) closeH2H();
-  if (refresh) Object.assign(stream, { data: null, plan: null });  // streaming page refetches too
+  if (refresh) { Object.assign(stream, { data: null, plan: null }); acc.data = null; }  // other pages refetch too
   if (!poll) document.querySelectorAll(".picker button, .picker select").forEach(x => x.disabled = true);
   try {
     const q = new URLSearchParams();
@@ -960,6 +1021,13 @@ $("#app").addEventListener("click", e => {
     planner.open.has(id) ? planner.open.delete(id) : planner.open.add(id);
     render(lastData);
     return document.querySelector(`[data-expand="${id}"]`)?.focus();
+  }
+  const ab = e.target.closest("[data-acc]");
+  if (ab) {  // accuracy page: show / hide a player's last 10 games
+    const id = Number(ab.dataset.acc);
+    acc.open.has(id) ? acc.open.delete(id) : acc.open.add(id);
+    render(lastData);
+    return document.querySelector(`[data-acc="${id}"]`)?.focus();
   }
   const sw = e.target.closest("[data-toggle]");
   if (sw) {  // who-plays switch: flip plays/sits and recompute the matchup odds

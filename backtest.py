@@ -88,7 +88,21 @@ def last5(h):
     return avg(h[-5:])
 
 
-METHODS = {"site (now)": site, "season avg": season, "blend 60/40": blend, "last 5": last5}
+def learned(h, k=20, start=5):
+    """The site model, corrected by the player's own track record: for each stat, actual / projected over his
+    earlier scored games, trusted more as games add up (weight n / (n + k))."""
+    proj = {key: 0.0 for key in STATS}
+    got = {key: 0.0 for key in STATS}
+    for j in range(start, len(h)):
+        p = site(h[:j])
+        for key in STATS:
+            proj[key] += p[key]
+            got[key] += h[j][key]
+    n, base = max(0, len(h) - start), site(h)
+    return {key: base[key] * (1 + ((got[key] / proj[key] - 1) if proj[key] else 0) * n / (n + k)) for key in STATS}
+
+
+METHODS = {"site (now)": site, "season avg": season, "blend 60/40": blend, "last 5": last5, "site+learned": learned}
 HINDSIGHT = "hindsight*"  # cheats with the whole season's average (future games included): a floor for average-based methods
 
 

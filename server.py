@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.request import Request, urlopen
 
+import backtest  # backtest.site() = the site's projection model, replayed on game logs
 import streaming
 from espn_api.basketball import League
 from espn_api.basketball.player import Player
@@ -725,7 +726,7 @@ def parse_gamelog(data):
                     "at": ev.get("atVs", "vs"),
                     "result": f'{ev.get("gameResult", "")} {ev.get("score", "")}'.strip(),
                     "stats": {
-                        "FG%": st.get("FG", ""), "FT%": st.get("FT", ""),
+                        "MIN": st.get("MIN", ""), "FG%": st.get("FG", ""), "FT%": st.get("FT", ""),
                         "3PM": st.get("3PT", "").split("-")[0],
                         "PTS": st.get("PTS", ""), "REB": st.get("REB", ""), "AST": st.get("AST", ""),
                         "STL": st.get("STL", ""), "BLK": st.get("BLK", ""), "TO": st.get("TO", ""),
@@ -740,7 +741,7 @@ def stat_line(game):
     num = lambda v: float(v) if v not in ("", "-", None) else 0.0
     fgm, fga = (num(x) for x in (st.get("FG%") or "0-0").split("-"))
     ftm, fta = (num(x) for x in (st.get("FT%") or "0-0").split("-"))
-    return {"FGM": fgm, "FGA": fga, "FTM": ftm, "FTA": fta, **{k: num(st.get(k)) for k in COUNTING}}
+    return {"MIN": num(st.get("MIN")), "FGM": fgm, "FGA": fga, "FTM": ftm, "FTA": fta, **{k: num(st.get(k)) for k in COUNTING}}
 
 
 def fill_actuals(lineups, today):
@@ -855,6 +856,54 @@ def live(player_id: int):
         if len(out["last3"]) >= 3:
             break
     return out
+
+
+ACCURACY_HISTORY = 5  # a game is scored once the player has this many earlier games this season
+
+
+def track_record(log):
+    """Replay one player's season: before each game, what the site's model would have projected from his earlier
+    games, next to what he actually did. Returns (totals projected, totals actual, games scored, last 10 games)."""
+    games = sorted((g for g in log if (g["stats"].get("MIN") or "0") not in ("0", "", "-")), key=lambda g: g["date"])
+    lines = [stat_line(g) for g in games]
+    proj_tot = {k: 0.0 for k in backtest.STATS}
+    act_tot = {k: 0.0 for k in backtest.STATS}
+    recent = []
+    for i in range(ACCURACY_HISTORY, len(lines)):
+        proj = backtest.site(lines[:i])
+        for k in backtest.STATS:
+            proj_tot[k] += proj[k]
+            act_tot[k] += lines[i][k]
+        recent.append({"date": games[i]["date"], "opp": games[i]["opp"], "at": games[i]["at"], "result": games[i]["result"],
+                       "proj": {k: round(proj[k], 2) for k in backtest.STATS}, "actual": lines[i]})
+    return proj_tot, act_tot, len(recent), recent[-10:][::-1]
+
+
+@app.get("/api/accuracy")
+def accuracy():
+    """Projected vs actual, game by game, for your roster this season (rebuilt from game logs, nothing stored)."""
+    hit = _cache.get(None) or next(iter(_cache.values()), None)
+    if not hit:
+        raise HTTPException(409, "Open the dashboard first so the site knows your roster.")
+    roster = hit["data"].get("roster", [])
+
+    def one(r):
+        try:
+            # finished games only: today's game may still be in progress
+            log = [g for g in fetch_gamelog(r["id"], current_season()) if g["date"] < datetime.now().date().isoformat()]
+            proj, act, n, recent = track_record(log)
+        except Exception as e:
+            return {"id": r["id"], "name": r["name"], "team": r["team"], "error": str(e), "games": 0}
+        return {"id": r["id"], "name": r["name"], "team": r["team"], "games": n,
+                "proj": {k: round(v, 1) for k, v in proj.items()}, "actual": act, "recent": recent}
+
+    with ThreadPoolExecutor(8) as pool:
+        players = list(pool.map(one, roster))
+    scored = [p for p in players if p["games"]]
+    team = {"games": sum(p["games"] for p in scored),
+            "proj": {k: round(sum(p["proj"][k] for p in scored), 1) for k in backtest.STATS},
+            "actual": {k: sum(p["actual"][k] for p in scored) for k in backtest.STATS}}
+    return {"players": players, "team": team, "history": ACCURACY_HISTORY}
 
 
 @app.get("/api/vs/{player_id}/{opp}")
