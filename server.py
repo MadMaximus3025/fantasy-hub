@@ -460,7 +460,8 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
         league_order(team.roster, today)
     project_players(me.roster, news, now)
     if opp:
-        project_players(opp.roster, {}, now)  # opponent: recent minutes only
+        # opponent gets the same recipe, role news included; the quick first version skips news for both teams
+        project_players(opp.roster, player_news(league, opp.roster) if actuals else {}, now)
 
     def player_row(p):
         return {
@@ -668,9 +669,8 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     droppable = {int(x) for x in drops.split(",") if x.strip().isdigit()} & roster_ids
     # only healthy free agents: OUT, injured reserve, day-to-day or suspended players can't be counted on to play
     fas = [p for p in free_agents(league) if healthy(p)]
-    news = player_news(league, me.roster + fas)  # opponent: recent minutes only, saving ~15 news requests
-    project_players(me.roster + fas, news, now)
-    project_players(opp.roster, {}, now)
+    news = player_news(league, me.roster + fas + opp.roster)  # same recipe for both teams and free agents
+    project_players(me.roster + fas + opp.roster, news, now)
 
     def entry(p, team_id, news_items, name=None):
         """A player for the planner, his lines scaled by role: recent minutes and role news."""

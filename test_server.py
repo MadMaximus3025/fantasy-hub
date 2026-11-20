@@ -492,5 +492,15 @@ bt = __import__("backtest")
 hist = [{"date": f"2026-11-{d:02d}", "MIN": m, **{k: 10.0 for k in bt.STATS}} for d, m in [(1, 30), (3, 30), (5, 30), (14, 40), (16, 40)]]
 assert bt.site(hist, when="2026-11-18")["PTS"] == 10 * 40 / 34  # Nov 14 + 16 in the last 7 days
 assert bt.site(hist[:3], when="2026-11-18")["PTS"] == 10  # nothing in the last 7 or 15 days with enough games: season average
+# opponent projections use the same recipe as yours, role news included (full build)
+fresh_news = {"role": 1, "headline": "Opp A will start", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}
+real_news = server.player_news
+server.player_news = lambda league, roster: {p.playerId: [fresh_news] for p in roster}
+league.scoreboard = lambda week: [NS(home_team=me, away_team=opp, home_team_cats=cats, away_team_cats=None)]
+server.build_dashboard(league, me, NOW, {}, week=5)
+assert opp.roster[0].proj_factor == 1.2 and "news: Opp A will start" in opp.roster[0].proj_why
+server.build_dashboard(league, me, NOW, {}, week=5, actuals=False)  # quick first version: no news for anyone
+assert opp.roster[0].proj_factor == 1.0
+server.player_news = real_news
 server._league["value"] = None; server._cache.clear(); server._news.clear()  # leave no fake state behind
 print("ok")
