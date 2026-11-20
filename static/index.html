@@ -225,6 +225,15 @@
   .news.open { display:block; }
   .news p { margin:var(--sp-1) 0; color:var(--text-2); }
   .news b { color:var(--text); }
+  .live { margin:var(--sp-2) 0; }
+  .live-today { border:1px solid var(--line); border-radius:var(--r-sm); padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-2); background:var(--card-2); }
+  .lt-head { display:flex; justify-content:space-between; gap:var(--sp-2); }
+  .lt-status { font:700 var(--fs-xs) var(--font); text-transform:uppercase; letter-spacing:.5px; color:var(--muted); }
+  .lt-status.in { color:var(--win); }
+  .stat-line { display:flex; flex-wrap:wrap; gap:var(--sp-1) var(--sp-3); margin:var(--sp-1) 0; font-size:var(--fs-sm); color:var(--text-2); }
+  .stat-line b { font:700 var(--fs-md) var(--font-num); color:var(--text); }
+  .last3 caption { text-align:left; font:700 var(--fs-xs) var(--font); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; padding:var(--sp-1) 0; }
+  .last3 th small, .last3 td small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
   .news .tag { font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--loss); }
   .games { list-style:none; margin:var(--sp-1) 0; padding:0; display:flex; flex-wrap:wrap; gap:var(--sp-1); }
   .games li { font-size:var(--fs-sm); color:var(--text-2); }
@@ -396,6 +405,47 @@ function matchupCard(d) {
     </div></div></section>`;
 }
 
+// ---- Live game + last 3 games inside a player's dashboard dropdown ----
+const liveData = {};  // player id -> /api/live response, or { error }
+let liveTimer;
+const statLine = st => [["PTS", st.PTS], ["REB", st.REB], ["AST", st.AST], ["STL", st.STL], ["BLK", st.BLK], ["3PM", st["3PM"]], ["TO", st.TO]]
+  .map(([k, v]) => `<span><b>${esc(v || "0")}</b> ${k}</span>`).join("")
+  + `<span><b>${esc(st["FG%"] || "0-0")}</b> FG</span><span><b>${esc(st["FT%"] || "0-0")}</b> FT</span>${st.MIN ? `<span><b>${esc(st.MIN)}</b> MIN</span>` : ""}`;
+
+function liveHtml(id) {
+  const x = liveData[id];
+  if (!x) return '<p class="muted">Loading today\'s game…</p>';
+  if (x.error) return `<p class="muted">Couldn't load live stats: ${esc(x.error)}</p>`;
+  const t = x.today, when = new Date(x.updated).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const today = !t ? '<p class="muted">No game today.</p>' : `<div class="live-today">
+      <div class="lt-head"><b>Today ${esc(t.at)} ${esc(t.opp)}</b><span class="lt-status ${t.state}">${t.state === "in" ? "Live · " : ""}${esc(t.status)}</span></div>
+      ${t.line ? `<div class="stat-line">${statLine(t.line)}</div>` : `<p class="muted">${t.state === "pre" ? "Hasn't started yet." : "No stats for him in this game."}</p>`}
+      <small class="muted">Updated ${when}${t.state === "in" ? " · refreshes every minute while this is open" : ""}</small></div>`;
+  const rows = x.last3.map(g => `<tr><th scope="row">${gameDay(g.date)}<small>${esc(g.at || "")} ${esc(g.opp || "")} ${esc(g.result || "")}</small></th>
+      ${["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO"].map(k => `<td>${esc(g.stats[k] ?? "")}</td>`).join("")}
+      <td>${pct(g.stats["FG%"] || "0-0")}<small>${esc(g.stats["FG%"] || "")}</small></td><td>${pct(g.stats["FT%"] || "0-0")}<small>${esc(g.stats["FT%"] || "")}</small></td></tr>`).join("");
+  const last = x.last3.length ? `<div class="h2h-scroll"><table class="last3"><caption>Last ${x.last3.length} games</caption>
+      <thead><tr><th scope="col">Game</th>${["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%"].map(k => `<th scope="col">${k}</th>`).join("")}</tr></thead>
+      <tbody>${rows}</tbody></table></div>` : "";
+  return today + last;
+}
+
+async function loadLive(id) {
+  clearTimeout(liveTimer);
+  try {
+    const r = await fetch(`/api/live/${id}`);
+    const j = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));
+    liveData[id] = r.ok ? j : { error: j.detail };
+  } catch (e) {
+    liveData[id] = { error: e.message };
+  }
+  const box = document.querySelector(`[data-live="${id}"]`);
+  if (box) box.innerHTML = liveHtml(id);
+  // keep a live game fresh while this player's panel stays open
+  if (liveData[id]?.today?.state === "in" && openPlayer !== null && lastData?.roster[openPlayer]?.id === id)
+    liveTimer = setTimeout(() => openPlayer !== null && lastData?.roster[openPlayer]?.id === id && loadLive(id), 60000);
+}
+
 function rosterCard(d) {
   const rows = d.roster.map((p, i) => `
     <div class="player">
@@ -409,6 +459,7 @@ function rosterCard(d) {
         </div>
       </div>
       <div class="news${i === openPlayer ? " open" : ""}" id="news-${i}">
+        <div class="live" data-live="${p.id}" aria-live="polite">${i === openPlayer ? liveHtml(p.id) : ""}</div>
         <ul class="games" aria-label="Games left this matchup">${p.upcoming.length
           ? p.upcoming.map(g => `<li><button class="chip" data-h2h="${p.id}" data-opp="${esc(g.opp)}" data-name="${esc(p.name)}" aria-haspopup="dialog" aria-expanded="false"><span>${gameDay(g.date)}</span> vs ${esc(g.opp)}</button></li>`).join("")
           : "<li>No games left this matchup</li>"}</ul>
@@ -855,6 +906,12 @@ $("#app").addEventListener("click", e => {
   b.setAttribute("aria-expanded", open);
   $("#news-" + b.dataset.news).classList.toggle("open", open);
   openPlayer = open ? Number(b.dataset.news) : null;
+  clearTimeout(liveTimer);
+  if (open) {  // today's game and last 3 games, fetched when the panel opens
+    const id = lastData.roster[openPlayer].id;
+    document.querySelector(`[data-live="${id}"]`).innerHTML = liveHtml(id);
+    loadLive(id);
+  }
 });
 $("#refresh").onclick = () => load(true);
 let planTimer;

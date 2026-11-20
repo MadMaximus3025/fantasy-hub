@@ -393,5 +393,34 @@ pl = __import__("streaming").plan(
     {1}, 3)
 assert pl["moves"][0]["why"] == "minutes 20 → 30 (last 7 days)" and "minutes 20 → 30" in pl["players"][1]["name"], pl
 assert pl["moves"][0]["add"]["line"] is None and pl["moves"][0]["add"]["factor"] == 1  # no stat lines given: page shows blanks
+# live game: scoreboard finds the team's game (site codes mapped), box score gives the player's line so far
+board = {"events": [{"id": "9", "status": {"type": {"state": "in", "shortDetail": "5:00 - 2nd"}},
+                     "competitions": [{"competitors": [{"team": {"abbreviation": "NY"}, "homeAway": "away"},
+                                                       {"team": {"abbreviation": "MIN"}, "homeAway": "home"}]}]}]}
+summary = {"boxscore": {"players": [{"statistics": [{"labels": ["MIN", "PTS", "FG", "3PT", "FT", "REB", "AST", "TO", "STL", "BLK"],
+           "athletes": [{"athlete": {"id": "77"}, "stats": ["20", "18", "7-12", "2-4", "2-2", "9", "3", "1", "1", "2"]},
+                        {"athlete": {"id": "78"}, "stats": []}]}]}]}}
+real_get, real_log = server.get_json, server.fetch_gamelog
+server.get_json = lambda url: board if "scoreboard" in url else summary
+server._live.clear()
+g = server.todays_game("NYK", TODAY)
+assert (g["opp"], g["at"], g["status"]) == ("MIN", "@", "5:00 - 2nd")
+assert g["players"]["77"] == {"MIN": "20", "FG%": "7-12", "FT%": "2-2", "3PM": "2", "PTS": "18", "REB": "9", "AST": "3", "STL": "1", "BLK": "2", "TO": "1"}
+assert "78" not in g["players"] and server.todays_game("BOS", TODAY) is None  # no stats yet / no game today
+# /api/live: roster only; today's line + last 3 finished games, newest first, today's own log entry left out
+server._cache[None] = {"at": _t.time(), "partial": False, "data": {"roster": [{"id": 77, "team": "NYK"}]}}
+log77 = [{"date": TODAY.isoformat(), "stats": {}}] + [{"date": f"2026-11-1{i}", "stats": {}} for i in (7, 5, 3, 1)]
+server.fetch_gamelog = lambda pid, season: log77
+real_dt = server.datetime
+server.datetime = type("D", (datetime,), {"now": classmethod(lambda c, tz=None: NOW if tz is None else real_dt.now(tz))})
+r = server.live(77)
+server.datetime = real_dt
+assert r["today"]["line"]["PTS"] == "18" and [x["date"] for x in r["last3"]] == ["2026-11-17", "2026-11-15", "2026-11-13"], r
+try:
+    server.live(999); assert False
+except HTTPException as e:
+    assert e.status_code == 404
+server.get_json, server.fetch_gamelog = real_get, real_log
+server._live.clear()
 server._league["value"] = None; server._cache.clear(); server._news.clear()  # leave no fake state behind
 print("ok")

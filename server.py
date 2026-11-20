@@ -724,6 +724,88 @@ def fetch_gamelog(player_id, season):
     return games
 
 
+SCOREBOARD_URL = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={}"
+SUMMARY_URL = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={}"
+LIVE_SECONDS = 30
+_live = {}  # cache key -> (time, parsed value); small parsed values only
+
+
+def cached(key, ttl, fetch):
+    hit = _live.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    value = fetch()
+    _live[key] = (time.time(), value)
+    if len(_live) > 100:  # a day has ~15 games; drop the oldest entries so the cache can't grow without end
+        for k in sorted(_live, key=lambda k: _live[k][0])[:50]:
+            _live.pop(k, None)
+    return value
+
+
+def get_json(url):
+    with urlopen(Request(url, headers=BROWSER_UA), timeout=10) as r:
+        return json.load(r)
+
+
+def box_line(labels, stats):
+    """An ESPN box-score row as the same stat dict the game log uses (FG%/FT% hold makes-attempts)."""
+    st = dict(zip(labels, stats))
+    return {"MIN": st.get("MIN", ""), "FG%": st.get("FG", ""), "FT%": st.get("FT", ""), "3PM": st.get("3PT", "").split("-")[0],
+            **{k: st.get(k, "") for k in ("PTS", "REB", "AST", "STL", "BLK", "TO")}}
+
+
+def parse_summary(data):
+    """{athlete id: stat line so far} from a game summary's box score."""
+    lines = {}
+    for team in data.get("boxscore", {}).get("players", []):
+        for block in team.get("statistics", []):
+            for a in block.get("athletes", []):
+                if a.get("stats"):
+                    lines[str(a["athlete"]["id"])] = box_line(block.get("labels", []), a["stats"])
+    return lines
+
+
+def todays_game(team, day):
+    """The NBA team's game on `day` (fantasy team code): status, opponent and every player's box-score line so far."""
+    board = cached(f"board:{day}", LIVE_SECONDS, lambda: get_json(SCOREBOARD_URL.format(day.strftime("%Y%m%d"))))
+    for ev in board.get("events", []):
+        sides = {SITE_TO_FANTASY.get(c["team"]["abbreviation"], c["team"]["abbreviation"]): c.get("homeAway")
+                 for c in ev["competitions"][0]["competitors"]}
+        if team not in sides:
+            continue
+        status = ev["status"]["type"]
+        game = {"opp": next(t for t in sides if t != team), "at": "vs" if sides[team] == "home" else "@",
+                "state": status.get("state"), "status": status.get("shortDetail") or status.get("description"), "players": {}}
+        if game["state"] != "pre":  # box score once the game has started
+            game["players"] = cached(f"box:{ev['id']}", LIVE_SECONDS, lambda: parse_summary(get_json(SUMMARY_URL.format(ev["id"]))))
+        return game
+    return None
+
+
+@app.get("/api/live/{player_id}")
+def live(player_id: int):
+    """Today's game for one of your players (status + his line so far) and his last 3 finished games."""
+    row = next((p for hit in _cache.values() for p in hit["data"].get("roster", []) if p["id"] == player_id), None)
+    if not row:  # only your roster, like the head-to-head popup
+        raise HTTPException(404, "Player not on your roster")
+    today = datetime.now().date()
+    out = {"updated": datetime.now(timezone.utc).isoformat(), "today": None, "last3": [], "errors": []}
+    try:
+        game = todays_game(row["team"], today)
+        if game:
+            out["today"] = {k: v for k, v in game.items() if k != "players"} | {"line": game["players"].get(str(player_id))}
+    except Exception as e:
+        out["errors"].append(f"live game: {e}")
+    for season in (current_season(), current_season() - 1):  # last season fills in early in the year
+        try:
+            out["last3"] += [g for g in fetch_gamelog(player_id, season) if g["date"] < today.isoformat()][:3 - len(out["last3"])]
+        except Exception as e:
+            out["errors"].append(f"game log {season}: {e}")
+        if len(out["last3"]) >= 3:
+            break
+    return out
+
+
 @app.get("/api/vs/{player_id}/{opp}")
 def vs_team(player_id: int, opp: str):
     if opp not in PRO_TEAM_MAP.values():
