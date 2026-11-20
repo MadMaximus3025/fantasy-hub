@@ -234,6 +234,7 @@
   .stat-line b { font:700 var(--fs-md) var(--font-num); color:var(--text); }
   .last3 caption { text-align:left; font:700 var(--fs-xs) var(--font); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; padding:var(--sp-1) 0; }
   .last3 th small, .last3 td small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
+  .pend { font:700 var(--fs-xs) var(--font); color:var(--accent); border:1px solid var(--accent); border-radius:var(--r-pill); padding:1px 8px; white-space:nowrap; }
   .news .tag { font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--loss); }
   .games { list-style:none; margin:var(--sp-1) 0; padding:0; display:flex; flex-wrap:wrap; gap:var(--sp-1); }
   .games li { font-size:var(--fs-sm); color:var(--text-2); }
@@ -453,6 +454,7 @@ function rosterCard(d) {
         <img src="${headshot(p.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
         <div><div class="name">${esc(p.name)}</div><div class="meta">${esc(p.pos)} · ${esc(p.team)}</div></div>
         <div class="tag">
+          ${p.pending ? `<span class="pend">${esc(p.pending)}</span>` : ""}
           ${p.injury ? `<span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}
           <span class="gl">${p.games_left} G left</span>
           <button data-news="${i}" aria-expanded="${i === openPlayer}" aria-controls="news-${i}">Games${p.news.length ? ` · ${p.news.length} news` : ""} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>
@@ -529,7 +531,7 @@ function streamView() {
     : a.limit == null ? "ESPN shows no weekly limit; set how many adds to plan" : `Limit ${a.limit} a week; ESPN didn't say how many you've used`;
   const roster = s.roster.map(p => `<div class="drop">
       <img class="pic sm" src="${headshot(p.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-      <span><b>${esc(p.name)}</b>${p.injury ? ` <span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}
+      <span><b>${esc(p.name)}</b>${p.injury ? ` <span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}${p.pending ? ` <span class="pend">${esc(p.pending)}</span>` : ""}
       <small>${esc(p.slot || "–")} · ${esc(p.team)} · ${p.starts_left} starts left this week${p.value != null ? ` · overall value ${p.value >= 0 ? "+" : ""}${p.value}` : ""}</small></span>
       <button class="switch" role="switch" data-drop="${p.id}" aria-checked="${drops.has(p.id)}" aria-label="${esc(p.name)} droppable">${drops.has(p.id) ? "Droppable" : "Stay"}</button></div>`).join("");
   const setup = `<section class="card"><h2>Who can go?</h2><p class="muted">Flip players to Droppable; the plan updates right away.</p>${roster}
@@ -732,7 +734,7 @@ function rosterGuideCard(d) {
   const head = `<tr><th scope="col">Slot</th><th scope="col">Player</th>${days.map((dt, i) => `<th scope="col" class="${i === todayIdx ? "today" : ""}">${dt.toLocaleDateString(undefined, { weekday: "short" })}<small>${i < todayIdx ? "Final" : i === todayIdx ? "Today" : dt.getDate()}</small></th>`).join("")}<th scope="col">Week${c === "Impact" ? "" : " " + c}</th></tr>`;
   const body = shown.map(r => `<tr><td>${esc(r.slot || "–")}</td><th scope="row">
         <img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-        <button class="expand" data-expand="${r.id}" aria-expanded="${planner.open.has(r.id)}">${esc(r.name)} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}<small>${esc(r.team)}</small></th>
+        <button class="expand" data-expand="${r.id}" aria-expanded="${planner.open.has(r.id)}">${esc(r.name)} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}${r.pending ? ` <span class="pend">${esc(r.pending)}</span>` : ""}<small>${esc(r.team)}</small></th>
       ${r.days.map((s, i) => cell(r, s, i, c)).join("")}<td class="wk">${week(r, c)}</td></tr>${details(r)}`).join("");
   const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label}</option>`;
   const note = c === "Impact"

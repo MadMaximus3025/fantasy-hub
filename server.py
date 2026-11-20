@@ -111,7 +111,8 @@ def played(entry, period):
 
 
 def day_lineups(league, start, end, today, team_ids, week):
-    """Each day's starting lineup per team, from ESPN's per-day rosters: {date: {team_id: {player_id: that day's stats or None}}}."""
+    """Each day's starting lineup per team, from ESPN's per-day rosters: {date: {team_id: {player_id: that day's stats or None}}},
+    and each day's full roster entries {date: {team_id: {player_id: entry}}} (future days include pending adds and drops)."""
     def one(d):
         try:
             period = league.scoringPeriodId + (d - today).days
@@ -120,17 +121,44 @@ def day_lineups(league, start, end, today, team_ids, week):
                 headers={"x-fantasy-filter": json.dumps({"schedule": {"filterMatchupPeriodIds": {"value": [week]}}})},
             )
         except Exception:
-            return d, {}  # a missing day falls back to today's lineup
-        teams = {}
+            return d, {}, {}  # a missing day falls back to today's lineup
+        teams, rosters = {}, {}
         for m in data.get("schedule", []):
             for t in (m.get("home", {}), m.get("away", {})):
                 if t.get("teamId") in team_ids and "rosterForCurrentScoringPeriod" in t:
-                    teams[t["teamId"]] = {e["playerId"]: played(e, period) for e in t["rosterForCurrentScoringPeriod"].get("entries", [])
+                    entries = t["rosterForCurrentScoringPeriod"].get("entries", [])
+                    teams[t["teamId"]] = {e["playerId"]: played(e, period) for e in entries
                                           if POSITION_MAP.get(e.get("lineupSlotId")) not in ("BE", "IR")}
-        return d, teams
+                    rosters[t["teamId"]] = {e["playerId"]: e for e in entries}
+        return d, teams, rosters
 
     with ThreadPoolExecutor(7) as pool:
-        return dict(pool.map(one, days_between(start, end)))
+        days = list(pool.map(one, days_between(start, end)))
+    return {d: t for d, t, _ in days}, {d: r for d, _, r in days}
+
+
+def pending_moves(team, rosters, today, league):
+    """Adds and drops ESPN holds until a later day (made after that day's games started). An added player joins the
+    roster from the day he arrives; a dropped one is marked. Per-day lineups already decide which days each counts."""
+    ids = {p.playerId for p in team.roster}
+    for d in sorted(x for x in rosters if x > today):
+        day = rosters[d].get(team.team_id)
+        if day is None:
+            continue  # ESPN didn't return that day
+        for p in team.roster:
+            if p.playerId not in day and not hasattr(p, "pending_until"):
+                p.pending_until, p.pending = d - timedelta(days=1), f"Dropped after {'today' if d - timedelta(days=1) == today else (d - timedelta(days=1)).strftime('%a')}"
+        for pid, entry in day.items():
+            if pid in ids:
+                continue
+            try:
+                p = Player(entry, league.year, league.pro_schedule)
+            except Exception:
+                logging.exception("Couldn't read a pending add")
+                continue
+            p.pending_from, p.pending = d, f"Added · from {d.strftime('%a')}"
+            team.roster.append(p)
+            ids.add(pid)
 
 
 def starting(p, team_id, d, lineups):
@@ -157,8 +185,8 @@ def daily_slate(roster, team_id, start, end, today, lineups=None):
 
 def day_state(p, team_id, d, today, lineups=None):
     """One player's status for one day, by the same rules as the slate:
-    start (counts), bench, out, dnp (started a past day but recorded no stats) or off (no game)."""
-    if not game_dates(p, d, d):
+    start (counts), bench, out, dnp (started a past day but recorded no stats) or off (no game, or not on the team)."""
+    if not game_dates(p, d, d) or d < getattr(p, "pending_from", d) or d > getattr(p, "pending_until", d):
         return "off"
     day = (lineups or {}).get(d, {}).get(team_id)
     if d < today and day is not None:
@@ -178,7 +206,7 @@ def planner_rows(roster, team_id, start, end, today, lineups):
         return stats if d <= today and isinstance(stats, dict) else None
 
     return [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
-             "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
+             "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None, "pending": getattr(p, "pending", None),
              "avg": {k: season_avg(p).get(k, 0) for k in keep},
              "days": [day_state(p, team_id, d, today, lineups) for d in days],
              "actual": [real(p, d) for d in days],
@@ -410,7 +438,9 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
     first, last = week_dates(league, week, today)
     left_from = max(today, first)  # games still to come in the selected week (none for a past week)
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
-    for team in (me, opp) if opp else (me,):  # same roster order on every page
+    lineups, rosters = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
+    for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
+        pending_moves(team, rosters, today, league)
         league_order(team.roster, today)
 
     def player_row(p):
@@ -420,8 +450,10 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
             "pos": "/".join(s for s in p.eligibleSlots if s in ("PG", "SG", "SF", "PF", "C")),
             "team": p.proTeam,
             "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
-            "games_left": len(game_dates(p, left_from, last)),
-            "upcoming": upcoming_games(p, left_from, last),
+            "pending": getattr(p, "pending", None),
+            # a pending add only plays from the day he arrives; a pending drop stops after his last day
+            "games_left": len(game_dates(p, max(left_from, getattr(p, "pending_from", left_from)), min(last, getattr(p, "pending_until", last)))),
+            "upcoming": upcoming_games(p, max(left_from, getattr(p, "pending_from", left_from)), min(last, getattr(p, "pending_until", last))),
             "news": news.get(p.playerId, []),
         }
 
@@ -433,7 +465,6 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
                  "count": max([week, current, *map(int, getattr(league.settings, "matchup_periods", None) or {})])},
         "opponent": None,
     }
-    lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
     if actuals:  # one game-log request per starter; the quick first version skips it
         fill_actuals(lineups, today)
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
@@ -537,7 +568,8 @@ def league_order(roster, today):
     injured (day-to-day/out) bench, then IR; ESPN's slot order (PG, SG, ..., UT) within each group."""
     def key(p):
         slot = p.lineupSlot
-        group = 4 if slot == "IR" else (2 if healthy(p) else 3) if slot == "BE" else 0 if game_dates(p, today, today) else 1
+        plays_today = game_dates(p, today, today) and getattr(p, "pending_from", today) <= today  # pending adds join later
+        group = 4 if slot == "IR" else (2 if healthy(p) else 3) if slot == "BE" else 0 if plays_today else 1
         return group, SLOT_ORDER.index(slot) if slot in SLOT_ORDER else len(SLOT_ORDER)
     roster.sort(key=key)
 
@@ -599,15 +631,16 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     today, week = now.date(), league.currentMatchupPeriod
     first, last = week_dates(league, week, today)
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
-    for team in (me, opp) if opp else (me,):  # same roster order on every page
+    lineups, rosters = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
+    for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
+        pending_moves(team, rosters, today, league)
         league_order(team.roster, today)
-    lineups = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
     acquisitions = acquisitions_left(league, me, first, last, week)
     out = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
            "opponent": opp.team_name if opp else None,
            "acquisitions": acquisitions,
            "roster": [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
-                       "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
+                       "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None, "pending": getattr(p, "pending", None),
                        "starts_left": len(game_lines(p, me.team_id, lineups, now, first, last))} for p in me.roster]}
     if not (plan and opp):
         return out

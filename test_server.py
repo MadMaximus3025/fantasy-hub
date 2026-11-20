@@ -74,7 +74,8 @@ def fake_get(params, headers):
     entry = lambda pid, slot: {"playerId": pid, "lineupSlotId": slot, "playerPoolEntry": {"player": {"stats": [{"scoringPeriodId": p, "statSourceId": 0, "stats": {"0": 5}}]}}}
     return {"schedule": [{"home": {"teamId": 1, "rosterForCurrentScoringPeriod": {"entries": [entry(p, 0), entry(99, 12), entry(98, 13)]}}, "away": {"teamId": 2}}]}
 lg = NS(scoringPeriodId=30, currentMatchupPeriod=5, espn_request=NS(league_get=fake_get))
-got = server.day_lineups(lg, MON, MON + timedelta(days=6), TODAY, {1, 2}, 5)
+got, got_rosters = server.day_lineups(lg, MON, MON + timedelta(days=6), TODAY, {1, 2}, 5)
+assert set(got_rosters[TODAY][1]) == {30, 99, 98}  # full roster incl. bench and IR, for pending adds/drops
 assert set(got[TODAY][1]) == {30} and set(got[MON][1]) == {28} and got[MON][1][28]["PTS"] == 5, got  # today = period 30, Monday = 28
 pro = {1: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]},
        2: {"5": [{"date": datetime(2026, 11, 16, 19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]}}
@@ -212,6 +213,25 @@ pro2 = {1: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}, {"dat
         2: {"x": [{"date": datetime(2026, 11, 17, 19).timestamp() * 1000}]}}
 assert server.team_games(NS(pro_schedule=pro2), MON, sun) == {"ATL": [0, 1, 0, 0, 0, 0, 0], "BOS": [0, 1, 0, 0, 0, 0, 0]}  # Nov 30 is outside the week
 assert set(d["planner"]) == {"mine", "teams", "theirs"}
+# pending moves: added after games started -> on the roster from tomorrow; dropped -> counts through today only
+keep, gone = f(1, "keep", [2, 3]), f(2, "gone", [2, 3, 4])
+team = NS(team_id=1, roster=[keep, gone])
+new_entry = {"playerId": 70, "lineupSlotId": 0, "playerPoolEntry": {"player": {"id": 70, "fullName": "New Guy", "defaultPositionId": 1,
+             "eligibleSlots": [0], "proTeamId": 1, "injuryStatus": "ACTIVE", "stats": []}}}
+THU, FRI = TODAY + timedelta(days=1), TODAY + timedelta(days=2)
+rost = {TODAY: {1: {1: {}, 2: {}}}, THU: {1: {1: {}, 70: new_entry}}, FRI: {1: {1: {}, 70: new_entry}}}
+pro70 = {1: {"x": [{"date": datetime.combine(d, datetime.min.time()).replace(hour=19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2}]
+             for d in (TODAY, THU)}}
+server.pending_moves(team, rost, TODAY, NS(year=2027, pro_schedule={1: {str(i): [g] for i, g in enumerate(
+    [{"date": datetime.combine(d, datetime.min.time()).replace(hour=19).timestamp() * 1000, "homeProTeamId": 1, "awayProTeamId": 2} for d in (TODAY, THU)])}}))
+added = next(x for x in team.roster if x.playerId == 70)
+assert (added.pending, added.pending_from) == ("Added · from Thu", THU) and gone.pending == "Dropped after today" and not hasattr(keep, "pending")
+assert server.day_state(added, 1, TODAY, TODAY, None) == "off" and server.day_state(gone, 1, THU, TODAY, None) == "off"
+server.pending_moves(team, rost, TODAY, NS(year=2027, pro_schedule={}))
+assert len(team.roster) == 3  # running again doesn't duplicate him
+server.league_order(team.roster, TODAY)
+assert [x.name for x in team.roster][0] == "keep"  # New Guy has a game today but isn't on the team until Thursday
+
 # roster order: starters with a game today, other starters, healthy bench, injured bench, IR; slot order inside
 ro = [f(1, "ir", [2], slot="IR"), f(2, "be-out", [2], injury="OUT", slot="BE"), f(3, "be", [2], slot="BE"),
       f(4, "c-off", [3], slot="C"), f(5, "pg-today", [2], slot="PG"), f(6, "ut-today", [2], slot="UT"), f(7, "c-today", [2], slot="C"),
@@ -338,7 +358,7 @@ hurt_star = f(52, "Hurt Star", [], injury="OUT", PTS=40, REB=12, AST=10)  # grea
 dtd = f(53, "Questionable Guy", [4, 5, 6], injury="DAY_TO_DAY", PTS=30)
 flagged = f(54, "Flagged", [4, 5, 6], PTS=30); flagged.injured = True
 server.free_agents = lambda lg: [hurt_star, dtd, flagged, fa]
-server.day_lineups = lambda *a: {}
+server.day_lineups = lambda *a: ({}, {})
 server.acquisitions_left = lambda *a: {"limit": 4, "per_period": None, "used": 2, "left": 2, "counted": []}
 server.datetime = type("D", (datetime,), {"now": classmethod(lambda c, tz=None: NOW)})
 out = server.stream(drops="51,999,abc", plan=True)
