@@ -367,14 +367,41 @@ def role_direction(text):
     return 1 if up and not down else -1 if down and not up else 0
 
 
+DAY_WORDS = re.compile(r"\b(tonight|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", re.I)
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def local_time(stamp):
+    """ESPN's UTC timestamp ('...Z') as a naive local (server TZ) datetime."""
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+
+
+def role_until(text, published):
+    """Last day a role item applies to, or None when it doesn't name a day. 'X will start Wednesday' is about that one
+    game, so it stops counting once Wednesday has passed; 'X moves into the starting lineup' keeps counting."""
+    sentence = next((s for s in re.split(r"(?<=[.!?])\s+", text) if ROLE_UP.search(s) or ROLE_DOWN.search(s)), "")
+    day = DAY_WORDS.search(sentence)
+    if not (day and published):
+        return None
+    pub, word = local_time(published).date(), day.group(1).lower()
+    if word in ("tonight", "today"):
+        return pub
+    if word == "tomorrow":
+        return pub + timedelta(days=1)
+    return pub + timedelta(days=(WEEKDAYS.index(word) - pub.weekday()) % 7)
+
+
 def role_factor(p, news, now):
     """(multiplier, reasons) from the newest role news of the last 7 days: x1.2 for a bigger role, x0.75 for a smaller one.
+    News about one game that's already been played ('will start Wednesday', now Friday) is skipped: projections look ahead.
     Recent minutes aren't used: the accuracy check (backtest.py) found them no better than the plain season average."""
     factor, why = 1.0, []
     for n in news:
         if not (n.get("role") and n.get("published")):  # undated news: age unknown, so it doesn't move the projection
             continue
-        if (now - datetime.fromisoformat(n["published"].replace("Z", "+00:00")).astimezone().replace(tzinfo=None)).days <= 7:
+        if n.get("until") and n["until"] < now.date().isoformat():
+            continue
+        if (now - local_time(n["published"])).days <= 7:
             factor *= 1.2 if n["role"] > 0 else 0.75
             why.append(f"news: {n['headline']}")
             break
@@ -418,7 +445,8 @@ def player_news(league, roster):
             text = tldr(n.get("headline"), 10_000) + " " + tldr(n.get("story"), 10_000)  # whole story, not just the shown sentence
             if news_kind(text):
                 items.append({"headline": tldr(n.get("headline")), "tldr": tldr(n.get("story")), "kind": news_kind(text),
-                              "role": role_direction(text), "published": n.get("published") or ""})
+                              "role": role_direction(text), "published": n.get("published") or "",
+                              "until": str(role_until(text, n.get("published")) or "")})
         _news[p.playerId] = (time.time(), items[:3])
         return p.playerId, items[:3]
 

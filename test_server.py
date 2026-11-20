@@ -413,6 +413,15 @@ old = dict(fresh, published=(NOW - timedelta(days=20)).isoformat() + "Z")
 assert round(server.role_factor(rp(20, 20), [fresh], NOW)[0], 2) == 1.2
 assert server.role_factor(rp(20, 20), [old], NOW)[0] == 1.0  # stale news ignored
 assert server.role_factor(rp(20, 20), [dict(fresh, role=-1)], NOW)[0] == 0.75
+# one-game news expires once that day has passed; general role news doesn't
+pub = (NOW - timedelta(days=3)).isoformat() + "Z"
+day3 = server.local_time(pub).date()
+assert server.role_until("Recap. Smith will start Wednesday against the Jazz.", pub) == day3 + timedelta(days=(2 - day3.weekday()) % 7)
+assert server.role_until("Smith will start tonight.", pub) == day3
+assert server.role_until("Smith moves into the starting lineup.", pub) is None
+one_game = dict(fresh, published=pub, until=str(day3))  # e.g. "will start tonight", 3 days ago
+assert server.role_factor(rp(20, 20), [one_game], NOW)[0] == 1.0
+assert server.role_factor(rp(20, 20), [dict(one_game, until="")], NOW)[0] == 1.2  # no day named: still counts
 
 # the planner passes the reason along with the pickup
 pl = __import__("streaming").plan(
