@@ -66,9 +66,9 @@ def season(h, when=None):
     return avg(h)
 
 
-def site(h, when=None):
-    """The site's projection: season average x (recent minutes / season minutes), capped 0.5-1.6. 'Recent' = games in
-    the 7 days before `when` (2+ games), else 15 days (3+), like ESPN's last-7/15-day splits the live site reads."""
+def minutes_factor(h, when=None):
+    """Season average x (recent minutes / season minutes), capped 0.5-1.6. 'Recent' = games in the 7 days before `when`
+    (2+ games), else 15 days (3+). Tested as no better than the season average, so the site dropped it; kept to compare."""
     day = lambda g: date.fromisoformat(g["date"][:10])
     ref = date.fromisoformat(when[:10]) if when else day(h[-1]) + timedelta(days=1)
     season_min, f = mean(g["MIN"] for g in h), 1
@@ -78,6 +78,11 @@ def site(h, when=None):
             f = max(0.5, min(1.6, mean(recent) / season_min))
             break
     return {k: v * f for k, v in avg(h).items()}
+
+
+def site(h, when=None):
+    """The site's projection as it can be replayed: the season average (role news isn't kept for past games)."""
+    return avg(h)
 
 
 def blend(h, when=None, recent=7, w=0.4):
@@ -109,7 +114,7 @@ def learned(h, when=None, k=20, start=5):
     return {key: base[key] * (1 + ((got[key] / proj[key] - 1) if proj[key] else 0) * n / (n + k)) for key in STATS}
 
 
-METHODS = {"site (now)": site, "season avg": season, "blend 60/40": blend, "last 5": last5, "site+learned": learned}
+METHODS = {"site (now)": site, "minutes factor": minutes_factor, "blend 60/40": blend, "last 5": last5, "site+learned": learned}
 HINDSIGHT = "hindsight*"  # cheats with the whole season's average (future games included): a floor for average-based methods
 
 

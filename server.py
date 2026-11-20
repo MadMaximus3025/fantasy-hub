@@ -368,17 +368,9 @@ def role_direction(text):
 
 
 def role_factor(p, news, now):
-    """(minutes multiplier, reasons): recent minutes vs season, then the newest role news from the last 7 days.
-    Stats scale with minutes, so a bigger role (e.g. a teammate's reduced one) projects more of everything."""
-    season = season_avg(p).get("MIN") or 0
+    """(multiplier, reasons) from the newest role news of the last 7 days: x1.2 for a bigger role, x0.75 for a smaller one.
+    Recent minutes aren't used: the accuracy check (backtest.py) found them no better than the plain season average."""
     factor, why = 1.0, []
-    for split, need in (("last_7", 2), ("last_15", 3)):
-        avg = p.stats.get(f"{p.year}_{split}", {}).get("avg") or {}
-        if season and avg.get("MIN") and (avg.get("GP") or 0) >= need:
-            factor = max(0.5, min(1.6, avg["MIN"] / season))
-            if abs(factor - 1) >= 0.03:  # smaller changes are noise
-                why.append(f"minutes {season:.1f} → {avg['MIN']:.1f} ({split.replace('_', ' ')} days)")
-            break
     for n in news:
         if not (n.get("role") and n.get("published")):  # undated news: age unknown, so it doesn't move the projection
             continue
@@ -391,7 +383,7 @@ def role_factor(p, news, now):
 
 def project_players(players, news, now):
     """The site's one projection recipe, stored on each player for every page to use:
-    per-game line = ESPN season average x role factor (recent minutes, plus role news when we have it)."""
+    per-game line = ESPN season average x role-news factor (1 when there's no recent role news)."""
     for p in players:
         factor, why = role_factor(p, news.get(p.playerId, []), now)
         avg = season_avg(p)
@@ -673,7 +665,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     project_players(me.roster + fas + opp.roster, news, now)
 
     def entry(p, team_id, news_items, name=None):
-        """A player for the planner, his lines scaled by role: recent minutes and role news."""
+        """A player for the planner, with the site's projection (season average x role-news factor)."""
         lines = game_lines(p, team_id, lineups, now, first, last)
         season = {k: season_avg(p).get(k, 0) for k in streaming.KEYS}  # what ESPN shows, for display
         return {"id": p.playerId, "name": name or p.name, "note": p.proj_why, "per_game": proj_avg(p),

@@ -401,16 +401,13 @@ assert server.role_direction("Smith is expected to see more minutes with Jones s
 assert server.role_direction("Smith was moved to the bench and will play a reduced role") == -1
 assert server.role_direction("Smith is questionable with an ankle sprain") == 0
 
-# role: recent minutes scale the whole line; the newest role news (last 7 days) moves it again
+# role: only the newest role news (last 7 days) moves the projection; recent minutes don't
 def rp(season_min, recent_min, gp=4):
     return NS(year=2027, stats={"2027_total": {"avg": {"MIN": season_min, "PTS": 10}},
                                 "2027_last_7": {"avg": {"MIN": recent_min, "GP": gp}}})
 f1, why1 = server.role_factor(rp(20, 30), [], NOW)
-assert round(f1, 2) == 1.5 and "minutes 20.0 → 30.0" in why1[0], (f1, why1)
-assert server.role_factor(rp(28.8, 27.6), [], NOW)[1] == ["minutes 28.8 → 27.6 (last 7 days)"]  # small changes are explained too
+assert f1 == 1.0 and why1 == [], (f1, why1)  # 20 -> 30 recent minutes: no change
 assert server.role_factor(rp(28.8, 28.5), [], NOW)[1] == []  # under 3%: noise
-assert server.role_factor(rp(20, 30, gp=1), [], NOW)[0] == 1.0  # one game isn't a trend
-assert server.role_factor(rp(20, 60), [], NOW)[0] == 1.6  # capped
 fresh = {"role": 1, "headline": "Smith will start", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}
 old = dict(fresh, published=(NOW - timedelta(days=20)).isoformat() + "Z")
 assert round(server.role_factor(rp(20, 20), [fresh], NOW)[0], 2) == 1.2
@@ -479,19 +476,20 @@ server.fetch_gamelog = real_log
 riser = f(80, "Riser", [3], PTS=20, MIN=20)
 riser.stats["2027_last_7"] = {"avg": {"MIN": 30, "GP": 3}}
 server.project_players([riser], {}, NOW)
-assert riser.proj_factor == 1.5 and riser.proj["PTS"] == 30 and "minutes 20.0 → 30.0" in riser.proj_why
-assert server.contributions([riser], NOW, MON, MON + timedelta(days=6))[0]["PTS"] == 30          # dashboard projection
-assert server.planner_rows([riser], 1, MON, MON + timedelta(days=6), TODAY, None)[0]["avg"]["PTS"] == 30  # planner
+server.project_players([riser], {80: [{"role": 1, "headline": "Riser will start", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}]}, NOW)
+assert riser.proj_factor == 1.2 and riser.proj["PTS"] == 24 and riser.proj_why == "news: Riser will start"
+assert server.contributions([riser], NOW, MON, MON + timedelta(days=6))[0]["PTS"] == 24          # dashboard projection
+assert server.planner_rows([riser], 1, MON, MON + timedelta(days=6), TODAY, None)[0]["avg"]["PTS"] == 24  # planner
 assert server.planner_rows([riser], 1, MON, MON + timedelta(days=6), TODAY, None)[0]["season"]["PTS"] == 20
 hurt = f(81, "Hurt", [3], injury="OUT", PTS=20, MIN=20); hurt.stats["2027_last_7"] = {"avg": {"MIN": 30, "GP": 3}}
-server.project_players([hurt], {}, NOW)
-assert server.availability([hurt], NOW, MON, MON + timedelta(days=6), 1, None)[0]["line"]["PTS"] == 30  # who-plays toggle
+server.project_players([hurt], {81: [{"role": -1, "headline": "Hurt to the bench", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}]}, NOW)
+assert server.availability([hurt], NOW, MON, MON + timedelta(days=6), 1, None)[0]["line"]["PTS"] == 15  # who-plays toggle
 
-# accuracy replay: recent minutes = games in the 7 days before the game (2+ games), else 15 days (3+)
+# accuracy replay = the season average; the dropped minutes factor stays in backtest.py to compare against
 bt = __import__("backtest")
 hist = [{"date": f"2026-11-{d:02d}", "MIN": m, **{k: 10.0 for k in bt.STATS}} for d, m in [(1, 30), (3, 30), (5, 30), (14, 40), (16, 40)]]
-assert bt.site(hist, when="2026-11-18")["PTS"] == 10 * 40 / 34  # Nov 14 + 16 in the last 7 days
-assert bt.site(hist[:3], when="2026-11-18")["PTS"] == 10  # nothing in the last 7 or 15 days with enough games: season average
+assert bt.site(hist, when="2026-11-18")["PTS"] == 10
+assert bt.minutes_factor(hist, when="2026-11-18")["PTS"] == 10 * 40 / 34  # Nov 14 + 16 in the last 7 days
 # opponent projections use the same recipe as yours, role news included (full build)
 fresh_news = {"role": 1, "headline": "Opp A will start", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}
 real_news = server.player_news
