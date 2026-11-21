@@ -180,13 +180,14 @@
   .guide td.st-out { color:var(--loss); }
   .guide .wk { font-weight:700; background:var(--surface-2); }
   .guide td.real { font-weight:700; color:var(--text); }
-  .guide .expand { background:none; border:0; padding:0; min-height:var(--tap); color:var(--text); font:600 var(--fs-md) var(--font); filter:none; }
+  .guide .expand { background:none; border:0; padding:0; min-height:var(--tap); color:var(--text); font:800 var(--fs-md) var(--font); text-transform:none; letter-spacing:0; filter:none; }
   .guide .expand:hover { text-decoration:underline; }
   .guide tr.detail th, .guide tr.detail td { font-size:var(--fs-sm); background:var(--row-hover); }
   .guide tr.detail th { color:var(--muted); padding-left:var(--sp-4); }
   /* sections are unboxed: a heavy ink rule on top, like a sports page */
   .card { background:var(--card); border:0; border-top:3px solid var(--text); border-radius:0; padding:var(--sp-4) 0; min-width:0; box-shadow:none; }
   .card h2 { margin:0 0 var(--sp-3); font-size:clamp(16px, 4.2vw, 20px); font-weight:900; line-height:1.1; color:var(--text); text-transform:uppercase; }
+  .card h2 small { font-size:var(--fs-sm); font-weight:400; text-transform:none; }
   button { display:inline-flex; align-items:center; gap:var(--sp-1); background:var(--text); color:var(--bg); border:2px solid var(--text); border-radius:var(--r-pill); padding:0 var(--sp-3); min-height:var(--tap); font:800 var(--fs-sm) var(--font); text-transform:uppercase; letter-spacing:.3px; cursor:pointer; transition:background-color var(--dur), opacity var(--dur); }
   button.ghost { background:transparent; color:var(--text); border:2px solid var(--text); }
   button:hover { opacity:.85; }
@@ -303,8 +304,8 @@
   tbody tr { transition:background-color var(--dur); }
   tbody tr:hover { background:var(--row-hover); }
   th:first-child, td:first-child { text-align:left; font-family:var(--font); }
-  th { color:var(--muted); font-size:var(--fs-xs); font-weight:800; text-transform:uppercase; letter-spacing:.5px; }
-  thead th { border-bottom:2px solid var(--text); }
+  th { color:var(--muted); font-size:var(--fs-sm); font-weight:600; }
+  thead th { font-size:var(--fs-xs); font-weight:800; text-transform:uppercase; letter-spacing:.5px; border-bottom:2px solid var(--text); }
   td.W { color:var(--win); font-weight:700; } td.L { color:var(--loss); font-weight:700; } td.T { color:var(--muted); }
   .stack { display:grid; gap:var(--sp-2); align-content:start; min-width:0; }
   .error { color:var(--loss); padding:var(--sp-4); }
