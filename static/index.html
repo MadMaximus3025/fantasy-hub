@@ -17,7 +17,7 @@
     --accent:#ffcc00; --on-accent:#101010; --accent-ink:#8a6500; --accent-line:#101010; --win:#15803d; --loss:#c8290f;
     --win-bg:rgb(21 128 61 / .10); --loss-bg:rgb(200 41 15 / .07);
     --you:#1d4ed8; --opp:#c2410c;
-    --surface-2:#f0f0f0; --row-hover:#f7f7f7; --focus:#101010;
+    --surface-2:#f0f0f0; --row-hover:#f7f7f7; --focus:#101010; --on-color:#fff;
     /* type */
     --font:"Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-num:"Archivo", system-ui, sans-serif;
@@ -28,6 +28,15 @@
     --r-sm:8px; --r-md:14px; --r-pill:999px;
     --shadow:none;
     --dur:150ms;
+  }
+  /* dark: set by the script in <head> from the saved choice or the system setting */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:#0f0f0f; --card:#0f0f0f; --card-2:#171717; --line:#2a2a2a; --text:#f2f2f2; --muted:#a3a3a3; --text-2:#d4d4d4;
+    --accent-ink:#ffcc00; --accent-line:#f2f2f2; --win:#3fb86a; --loss:#ff704f;
+    --win-bg:rgb(63 184 106 / .14); --loss-bg:rgb(255 112 79 / .10);
+    --you:#60a5fa; --opp:#fb923c;
+    --surface-2:#1f1f1f; --row-hover:#1a1a1a; --focus:#f2f2f2; --on-color:#101010;
   }
   @media (pointer: coarse) { :root { --tap:44px; } }
   @media (prefers-reduced-motion: reduce) { :root { --dur:0ms; } }
@@ -89,7 +98,7 @@
   .nav-row { flex-wrap:wrap; justify-content:flex-end; }
   .nav-row a.button:not([aria-current]) { background:transparent; color:var(--text); border:2px solid var(--text); }
   .drop .switch { margin-left:auto; min-width:6.5em; }
-  .switch[aria-checked="true"][data-drop] { background:var(--loss); color:#fff; }
+  .switch[aria-checked="true"][data-drop] { background:var(--loss); color:var(--on-color); }
   .rd-wrap { display:grid; grid-template-columns:minmax(280px, 400px) 1fr; gap:var(--sp-3); align-items:center; }
   @media (max-width: 700px) { .rd-wrap { grid-template-columns:1fr; } }
   .radar { width:100%; height:auto; }
@@ -135,7 +144,7 @@
   .chip.day { padding:0 var(--sp-3); }
   .cb-n { font-family:var(--font-num); text-align:right; white-space:nowrap; color:var(--text-2); }
   .day-chips { display:flex; flex-wrap:wrap; gap:var(--sp-1); margin-bottom:var(--sp-2); }
-  .chip.day[aria-pressed="true"] { background:var(--you); color:#fff; border-color:var(--you); }
+  .chip.day[aria-pressed="true"] { background:var(--you); color:var(--on-color); border-color:var(--you); }
   .guide th.today, .guide td.today { background:rgb(96 165 250 / .10); }
   .guide td.imp { font-weight:600; }
   .panel-row > td { padding:var(--sp-3) var(--sp-2) var(--sp-4); background:var(--card-2); text-align:left !important; white-space:normal !important; }
@@ -221,7 +230,7 @@
   .adj span:last-child { text-align:right; }
   .move .meta-line { display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-2); color:var(--muted); font-size:var(--fs-sm); margin:var(--sp-1) 0 var(--sp-2); }
   .move .kind { font:800 var(--fs-xs) var(--font); letter-spacing:.5px; text-transform:uppercase; padding:2px var(--sp-2); border-radius:var(--r-pill); background:var(--accent); color:var(--on-accent); }
-  .move .kind.upgrade { background:var(--you); color:#fff; }
+  .move .kind.upgrade { background:var(--you); color:var(--on-color); }
   .move-why ul { list-style:disc; margin:var(--sp-1) 0 0; padding-left:var(--sp-5, 1.25rem); color:var(--text-2); font-size:var(--fs-sm); }
   .move-why li { margin:var(--sp-1) 0; }
   .name { font-weight:800; }
@@ -300,12 +309,20 @@
   .stack { display:grid; gap:var(--sp-2); align-content:start; min-width:0; }
   .error { color:var(--loss); padding:var(--sp-4); }
 </style>
+<script>
+  // Theme before first paint: saved choice wins, else follow the system setting (and its changes)
+  const themeDark = matchMedia("(prefers-color-scheme: dark)");
+  const savedTheme = () => { try { return localStorage.getItem("theme"); } catch { return null; } };
+  const applyTheme = () => document.documentElement.dataset.theme = savedTheme() || (themeDark.matches ? "dark" : "light");
+  applyTheme();
+  themeDark.addEventListener("change", applyTheme);
+</script>
 </head>
 <body>
 <header>
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
-    <nav class="nav-row" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button></nav>
+    <nav class="nav-row" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -1022,6 +1039,14 @@ $("#app").addEventListener("click", e => {
   }
 });
 $("#refresh").onclick = () => load(true);
+const themeLabel = () => { const dark = document.documentElement.dataset.theme === "dark";
+  $("#theme").textContent = dark ? "Light" : "Dark"; $("#theme").setAttribute("aria-label", `Switch to ${dark ? "light" : "dark"} mode`); };
+$("#theme").onclick = () => {
+  try { localStorage.setItem("theme", document.documentElement.dataset.theme === "dark" ? "light" : "dark"); } catch {}
+  applyTheme(); themeLabel();
+};
+themeDark.addEventListener("change", themeLabel);
+themeLabel();
 let planTimer;
 const planSoon = () => { clearTimeout(planTimer); planTimer = setTimeout(() => loadStream(true), 500); };  // wait for quick flips
 $("#app").addEventListener("input", e => { if (e.target.id === "acq") { stream.acq = e.target.value; planSoon(); } });
