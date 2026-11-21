@@ -524,4 +524,18 @@ server.build_dashboard(league, me, NOW, {}, week=5, actuals=False)  # quick firs
 assert opp.roster[0].proj_factor == 1.0
 server.player_news = real_news
 server._league["value"] = None; server._cache.clear(); server._news.clear()  # leave no fake state behind
+
+# with_live(): ESPN's totals (finished days) + today's starters, in-progress games included; % weighted by attempts
+board = {"PTS": {"score": 380.0}, "TO": {"score": 60.0}, "FG%": {"score": 0.5}, "FT%": {"score": 0.8}}
+ln = lambda **k: {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "3PM": 0, "TO": 0, "FGM": 0, "FGA": 0, "FTM": 0, "FTA": 0, **k}
+lu = {MON: {1: {10: ln(PTS=100, FGM=40, FGA=80, FTA=0)}},  # earlier day: 80 attempts behind ESPN's .500
+      TODAY: {1: {10: ln(PTS=30, TO=2, FGM=10, FGA=20, FTM=4, FTA=5), 11: None}, 2: {20: ln(PTS=9)}}}  # 11 = no stats yet
+live = server.with_live(board, lu, TODAY, 1)
+assert live["PTS"]["score"] == 410 and live["TO"]["score"] == 62, live  # 380 + 30; only team 1's starters
+assert abs(live["FG%"]["score"] - (0.5 * 80 + 10) / (80 + 20)) < 1e-9, live  # (40 + 10) / 100
+assert live["FT%"]["score"] == 0.8 and board["PTS"]["score"] == 380  # no earlier FT attempts: ESPN's % kept; input untouched
+assert server.with_live(board, lu, TODAY + timedelta(days=1), 1) is board  # today not in the week's data: unchanged
+assert server.with_live(board, {TODAY: {1: {10: None}}}, TODAY, 1) is board  # nobody has played yet today
+first_fg = server.with_live({"FG%": {"score": 0}}, {TODAY: {1: {10: ln(FGM=3, FGA=4)}}}, TODAY, 1)
+assert first_fg["FG%"]["score"] == 0.75, first_fg  # first games of the week: today's % alone
 print("ok")
