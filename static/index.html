@@ -50,9 +50,9 @@
   main { display:grid; grid-template-columns: 1.6fr 1fr; gap:var(--sp-4) 32px; padding:0 var(--sp-4) var(--sp-4); }
   main.planner { grid-template-columns: 1fr 1.8fr; }
   .wide { grid-column:1 / -1; }
-  .mc-grid { display:grid; grid-template-columns:1.4fr 1fr; gap:var(--sp-4); }
+  .mc-grid { display:grid; grid-template-columns:minmax(0, 1.4fr) minmax(0, 1fr); gap:var(--sp-4); }
   .mc-side { border-left:1px solid var(--line); padding-left:var(--sp-4); }
-  @media (max-width: 900px) { .mc-grid { grid-template-columns:1fr; } .mc-side { border-left:0; padding-left:0; border-top:1px solid var(--line); padding-top:var(--sp-3); } }
+  @media (max-width: 900px) { .mc-grid { grid-template-columns:minmax(0, 1fr); } .mc-side { border-left:0; padding-left:0; border-top:1px solid var(--line); padding-top:var(--sp-3); } }
   .mc-big { display:flex; align-items:baseline; gap:var(--sp-3); }
   .mc-big .num { font:800 64px/1 var(--font-num); }
   .mc-big span:last-child { font-weight:700; color:var(--text-2); text-transform:uppercase; letter-spacing:.5px; font-size:var(--fs-sm); }
