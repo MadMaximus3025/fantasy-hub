@@ -256,6 +256,28 @@ def scores(current_cats):
     return {k: (v or {}).get("score", 0) for k, v in (current_cats or {}).items()}
 
 
+def with_live(current_cats, lineups, today, team_id):
+    """ESPN's matchup totals cover finished scoring periods only; ESPN's live view also counts the period in progress.
+    lineups[today] is always ESPN's current period (see day_lineups), so add its starters' stats, games in progress
+    included. FG%/FT% have no makes/attempts in the totals: weight ESPN's % by the earlier days' attempts instead."""
+    now = [s for s in ((lineups or {}).get(today, {}).get(team_id) or {}).values() if s]
+    if not current_cats or not now:
+        return current_cats
+    add = lambda k, rows: sum(s.get(k, 0) or 0 for s in rows)
+    earlier = [s for d, teams in lineups.items() if d < today for s in (teams.get(team_id) or {}).values() if s]
+    out = {k: dict(v or {}) for k, v in current_cats.items()}
+    for k in COUNTING:
+        if k in out:
+            out[k]["score"] = (out[k].get("score") or 0) + add(k, now)
+    for pct, m, a in (("FG%", "FGM", "FGA"), ("FT%", "FTM", "FTA")):
+        if pct not in out or not add(a, now):
+            continue
+        board, before = out[pct].get("score") or 0, add(a, earlier)
+        if before or not board:  # shortcut: if earlier days are missing but ESPN has a %, keep ESPN's % unchanged
+            out[pct]["score"] = (board * before + add(m, now)) / (before + add(a, now))
+    return out
+
+
 def starts_left(p, now, start, end, team_id=None, lineups=None):
     """Games p starts this week that haven't begun (played ones are in the current matchup totals already)."""
     return sum(1 for x in p.schedule.values()
@@ -518,6 +540,9 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
     }
     if actuals:  # one game-log request per starter; the quick first version skips it
         fill_actuals(lineups, today)
+    # match ESPN's live totals: finished days plus today's games, in progress included
+    my_cats = with_live(my_cats, lineups, today, me.team_id)
+    opp_cats = with_live(opp_cats, lineups, today, opp.team_id) if opp else opp_cats
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
     data["planner"] = {"mine": planner_rows(me.roster, me.team_id, first, last, today, lineups),
                        "teams": team_games(league, first, last)}
@@ -683,10 +708,12 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     first, last = week_dates(league, week, today)
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
     lineups, rosters = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
+    my_cats = with_live(my_cats, lineups, today, me.team_id)  # same live totals as the dashboard
+    opp_cats = with_live(opp_cats, lineups, today, opp.team_id) if opp else opp_cats
     for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
         pending_moves(team, rosters, today, league)
         league_order(team.roster, today)
-    keepers = [p for p in me.roster if not hasattr(p, "pending_until")]  # pending drops are gone for planning purposes
+    keepers =[p for p in me.roster if not hasattr(p, "pending_until")]  # pending drops are gone for planning purposes
     acquisitions = acquisitions_left(league, me, first, last, week)
     out = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
            "opponent": opp.team_name if opp else None,
