@@ -310,6 +310,22 @@
   td.W { color:var(--win); font-weight:700; } td.L { color:var(--loss); font-weight:700; } td.T { color:var(--muted); }
   .stack { display:grid; gap:var(--sp-2); align-content:start; min-width:0; }
   .error { color:var(--loss); padding:var(--sp-4); }
+  /* phones: the page links fold into a ☰ menu that opens as a stacked list under the header */
+  .menu-toggle { display:none; }
+  @media (max-width: 700px) {
+    header { position:relative; flex-wrap:nowrap; align-items:flex-start; }
+    .menu-toggle { display:inline-flex; justify-content:center; width:44px; height:44px; padding:0; background:transparent; color:var(--text); border:2px solid var(--text); }
+    .menu-toggle svg { width:20px; height:20px; }
+    .menu-toggle[aria-expanded] svg { transform:none; }  /* no spin: the icon swaps ☰ to ✕ instead */
+    .menu-toggle[aria-expanded="true"] .i-open, .menu-toggle[aria-expanded="false"] .i-close { display:none; }
+    .nav-row { display:none; }
+    header.menu-open .nav-row { display:flex; flex-direction:column; align-items:stretch; gap:0; position:absolute; top:100%; left:0; right:0; z-index:20;
+      padding:0 var(--sp-4) var(--sp-2); background:var(--bg); border-bottom:3px solid var(--text); }
+    header.menu-open .nav-row a.button, header.menu-open .nav-row button { justify-content:flex-start; min-height:52px; padding:0; border:0; border-bottom:1px solid var(--line);
+      border-radius:0; background:transparent; color:var(--text); font-size:18px; font-weight:900; }
+    header.menu-open .nav-row > :last-child { border-bottom:0; }
+    header.menu-open .nav-row a[aria-current] { text-decoration:underline 4px var(--accent); text-underline-offset:8px; }
+  }
 </style>
 <script>
   // Theme before first paint: saved choice wins, else follow the system setting (and its changes)
@@ -324,7 +340,8 @@
 <header>
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
-    <nav class="nav-row" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
+    <button class="menu-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="pages"><svg class="i-open" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><svg class="i-close" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></button>
+    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -939,6 +956,12 @@ function render(d) {
     : matchupCard(d) + rosterCard(d);
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
+// Phone menu: the ☰ button opens the page list; any choice in it, Escape, or a tap outside closes it
+const menu = $(".menu-toggle"), setMenu = open => { document.querySelector("header").classList.toggle("menu-open", open); menu.setAttribute("aria-expanded", open); };
+menu.onclick = () => setMenu(menu.getAttribute("aria-expanded") !== "true");
+$("#pages").addEventListener("click", e => { if (e.target.closest("a, button")) setMenu(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && menu.getAttribute("aria-expanded") === "true") { setMenu(false); menu.focus(); } });
+document.addEventListener("click", e => { if (!e.target.closest("header")) setMenu(false); });
 
 let loadGen = 0;  // newer loads cancel older ones' follow-up checks
 
