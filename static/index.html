@@ -269,6 +269,7 @@
   .breakdown summary { cursor:pointer; font-weight:600; min-height:var(--tap); display:flex; align-items:center; }
   .breakdown h3 { margin:var(--sp-3) 0 var(--sp-1); font-size:var(--fs-sm); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
   .breakdown th, .breakdown td { white-space:nowrap; }
+  .breakdown tbody th { white-space:normal; min-width:12em; }  /* names carry news notes; let them wrap so the stat columns stay in view */
   .breakdown tr.sum td, .breakdown tr.sum th { font-weight:700; border-top:2px solid var(--line); }
   .h2h th, .h2h td { white-space:nowrap; }
   .h2h small, .breakdown small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
