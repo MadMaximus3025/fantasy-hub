@@ -94,9 +94,11 @@
   .nn-bars .bar { display:block; height:6px; border-radius:3px; } .nn-bars .bar.you { background:var(--you); } .nn-bars .bar.opp { background:var(--opp); }
   .nn-n { font-family:var(--font-num); text-align:right; } .nn-d { font:700 var(--fs-sm) var(--font-num); text-align:right; }
   @media (max-width: 900px) { main, main.planner { grid-template-columns:1fr; } }
-  .nav-row { display:flex; gap:var(--sp-2); }
-  .nav-row { flex-wrap:wrap; justify-content:flex-end; }
-  .nav-row a.button:not([aria-current]) { background:transparent; color:var(--text); border:2px solid var(--text); }
+  .nav-row { display:flex; align-items:center; gap:var(--sp-2) 24px; flex-wrap:wrap; justify-content:flex-end; }
+  /* page links are text with a yellow bar under the current page; Refresh and theme stay pills */
+  .nav-row a.button { background:transparent; color:var(--text); border:0; border-bottom:4px solid transparent; border-radius:0; padding:0; font-size:15px; font-weight:900; }
+  .nav-row a.button[aria-current] { border-bottom-color:var(--accent); }
+  .nav-row a.button:not([aria-current]):hover { border-bottom-color:var(--line); }
   .drop .switch { margin-left:auto; min-width:6.5em; }
   .switch[aria-checked="true"][data-drop] { background:var(--loss); color:var(--on-color); }
   .rd-wrap { display:grid; grid-template-columns:minmax(280px, 400px) 1fr; gap:var(--sp-3); align-items:center; }
@@ -312,7 +314,7 @@
   .error { color:var(--loss); padding:var(--sp-4); }
   /* phones: the page links fold into a ☰ menu that opens as a stacked list under the header */
   .menu-toggle { display:none; }
-  @media (max-width: 700px) {
+  @media (max-width: 860px) {
     header { position:relative; flex-wrap:nowrap; align-items:flex-start; }
     .menu-toggle { display:inline-flex; justify-content:center; width:44px; height:44px; padding:0; background:transparent; color:var(--text); border:2px solid var(--text); }
     .menu-toggle svg { width:20px; height:20px; }
