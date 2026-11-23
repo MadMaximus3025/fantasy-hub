@@ -132,12 +132,29 @@ def rows(players, tags=None):
     return out
 
 
+def fits(players, lineup):
+    """Can every one of `players` (each a list of eligible slot names) start at once in `lineup` (slot names)?
+    Matching by augmenting paths; lineups have about ten slots, so this is instant."""
+    owner = {}  # slot index -> player index
+
+    def place(i, seen):
+        for j, slot in enumerate(lineup):
+            if slot in players[i] and j not in seen:
+                seen.add(j)
+                if j not in owner or place(owner[j], seen):
+                    owner[j] = i
+                    return True
+        return False
+
+    return len(players) <= len(lineup) and all(place(i, set()) for i in range(len(players)))
+
+
 def record(res):
     return f'{sum(r == "W" for r in res.values())}-{sum(r == "L" for r in res.values())}-{sum(r == "T" for r in res.values())}'
 
 
 def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None,
-         opp_rem=None):
+         opp_rem=None, lineup=None):
     """Greedy week plan.
 
     days: remaining dates in order. slots: starting spots per day.
@@ -147,6 +164,9 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     values: {id: per-game season value} from player_values(). next_games: {id: games in next week's matchup}.
     A move's value gain = pickup's value x his games (counted this week + next week) - the same for the dropped player.
     opp_rem: the opponent's summed remaining lines (remaining()), for how much his totals can still swing.
+    lineup: the league's starting slots (e.g. ["PG", "SG", ..., "UT"]); with players' "elig" slot lists, a pickup's
+    game only counts on a day he fits into the lineup next to everyone already starting (positions checked).
+    Without it, a game counts while fewer than `slots` players start that day.
     Each step tries every add (today or on one of the free agent's game days) with every allowed drop. This week
     comes first: a stream raises the categories you expect to win this week (by STREAM_MIN+) without costing much
     two-week value, and the best stream wins. Only when no stream helps, an upgrade may be made: clear value this
@@ -176,11 +196,18 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
             new_roster.append(p)
         games = {}
         for d, line in add["lines"].items():
-            if d >= day and new_used[d] < slots:  # only counts on days a starting spot is free
+            if d < day:
+                continue
+            if lineup and add.get("elig") is not None:  # positions: he must fit next to that day's starters
+                starters = [p.get("elig") or [] for p in new_roster if d in p["games"]]
+                ok = fits(starters + [add["elig"]], lineup) if fits(starters, lineup) else new_used[d] < slots
+            else:
+                ok = new_used[d] < slots  # only counts on days a starting spot is free
+            if ok:
                 games[d] = line
                 new_used[d] += 1
         new_roster.append({"id": add["id"], "name": add["name"], "games": games,
-                           **{k: add.get(k) for k in ("note", "per_game", "season", "factor", "basis", "recent", "upcoming")}})
+                           **{k: add.get(k) for k in ("note", "per_game", "season", "factor", "basis", "recent", "upcoming", "elig")}})
         return new_roster, new_used, games
 
     for _ in range(max(0, int(acquisitions))):
@@ -235,6 +262,8 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         lost = {d: l for d, l in drop["games"].items() if d >= day}  # the dropped player's games from that day on
         moves.append({"day": day, "add": side(fa), "drop": side(drop),
                       "games": sorted(games), "why": fa.get("note", ""),
+                      # his games from the add day on that can't count: lineup full, or no open slot for his positions
+                      "benched": sorted(d for d in fa["lines"] if d >= day and d not in games),
                       "kind": "stream" if pick[0][0] else "upgrade", "week": dw, "value": round(dv, 2),
                       # what each side brings to or takes from this week's matchup: games and summed stats
                       "add_stats": {k: sum(l.get(k, 0) for l in games.values()) for k in KEYS},
