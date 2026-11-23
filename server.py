@@ -238,7 +238,16 @@ def day_state(p, team_id, d, today, lineups=None):
     return "start" if starting(p, team_id, d, lineups) else "bench"
 
 
-def planner_rows(roster, team_id, start, end, today, lineups):
+def slot_on(p, team_id, d, rosters):
+    """p's ESPN lineup slot on day d from that day's roster; his current slot when ESPN didn't return that day."""
+    day = (rosters or {}).get(d, {}).get(team_id)
+    if day is None:
+        return p.lineupSlot
+    entry = day.get(p.playerId)
+    return POSITION_MAP.get(entry.get("lineupSlotId"), p.lineupSlot) if entry else None
+
+
+def planner_rows(roster, team_id, start, end, today, lineups, rosters=None):
     """Weekly planner rows: each player's slot, injury, season averages and status for every day of the week."""
     keep = COUNTING + ["FGM", "FGA", "FTM", "FTA"]
     days = days_between(start, end)
@@ -250,6 +259,8 @@ def planner_rows(roster, team_id, start, end, today, lineups):
     return [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
              "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None, "pending": getattr(p, "pending", None),
              "elig": [x for x in getattr(p, "eligibleSlots", []) if x not in ("BE", "IR")],  # lineup slots he can fill
+             # his ESPN lineup slot each day (PG ... UT, BE, IR); None when he isn't on the team that day
+             "dslots": [slot_on(p, team_id, d, rosters) for d in days],
              "avg": {k: proj_avg(p).get(k, 0) for k in keep},  # projection (what every page uses)
              "season": {k: season_avg(p).get(k, 0) for k in keep}, "factor": getattr(p, "proj_factor", 1), "why": getattr(p, "proj_why", ""),
              "days": [day_state(p, team_id, d, today, lineups) for d in days],
@@ -616,14 +627,14 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
     my_cats = with_live(my_cats, lineups, live, me.team_id)
     opp_cats = with_live(opp_cats, lineups, live, opp.team_id) if opp else opp_cats
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
-    data["planner"] = {"mine": planner_rows(me.roster, me.team_id, first, last, today, lineups),
+    data["planner"] = {"mine": planner_rows(me.roster, me.team_id, first, last, today, lineups, rosters),
                        "teams": team_games(league, first, last)}
     if opp:
         mine_proj = project(me.roster, my_cats, now, first, last, me.team_id, lineups)
         opp_proj = project(opp.roster, opp_cats, now, first, last, opp.team_id, lineups)
         data["opponent"] = opp.team_name
         data["slate"]["theirs"] = daily_slate(opp.roster, opp.team_id, first, last, today, lineups)
-        data["planner"]["theirs"] = planner_rows(opp.roster, opp.team_id, first, last, today, lineups)
+        data["planner"]["theirs"] = planner_rows(opp.roster, opp.team_id, first, last, today, lineups, rosters)
         data["projection"] = {
             "cats": CATS,
             "mine": mine_proj,

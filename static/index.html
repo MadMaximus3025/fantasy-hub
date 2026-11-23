@@ -275,6 +275,11 @@
   .net { margin:var(--sp-2) 0; font-size:var(--fs-sm); color:var(--text-2); }
   .net .pos, .net .neg { font-weight:700; }
   .lineup tr.lu-change > * { background:rgb(255 204 0 / .12); }
+  .lineup tr.lu-idle > * { opacity:.55; }
+  .lineup .lu-slot { font-weight:800; text-align:left; }
+  .lineup .switch { min-width:4.5em; }
+  .lu-actions { display:flex; gap:var(--sp-2); flex-wrap:wrap; margin:var(--sp-2) 0; }
+  .lu-totals td, .lu-totals th { white-space:nowrap; }
   .lineup tbody th { white-space:nowrap; color:var(--text); font-weight:800; }
   .lineup tbody th small { display:block; margin-left:42px; }
   .ahead { list-style:none; margin:var(--sp-2) 0; padding:0; font-size:var(--fs-sm); color:var(--text-2); }
@@ -381,8 +386,8 @@ const erf = x => {  // Abramowitz-Stegun 7.1.26
 const normCdf = z => 0.5 * (1 + erf(z / Math.SQRT2));
 
 // Remaining stats for one team: the projection's counted players, adjusted by the plays/sits toggles
-function teamLine(current, rows, avail) {
-  const rem = Object.fromEntries(KEYS.map(k => [k, rows.reduce((t, r) => t + (r[k] || 0), 0)]));
+function teamLine(current, rows, avail, extra = null) {
+  const rem = Object.fromEntries(KEYS.map(k => [k, rows.reduce((t, r) => t + (r[k] || 0), 0) + ((extra || {})[k] || 0)]));
   for (const a of avail) {
     const sign = isPlaying(a) && !a.counted ? 1 : !isPlaying(a) && a.counted ? -1 : 0;
     for (const k of KEYS) rem[k] += sign * (a.line[k] || 0);
@@ -403,9 +408,9 @@ function matchupSummary(d) {
 }
 const lineVal0 = (tot, c) => tot[c] || 0;
 
-function matchupOdds(d) {
+function matchupOdds(d, extra = null) {
   const p = d.projection, av = p.availability || { mine: [], theirs: [] };
-  const A = teamLine(p.current.mine, p.players.mine, av.mine), B = teamLine(p.current.theirs, p.players.theirs, av.theirs);
+  const A = teamLine(p.current.mine, p.players.mine, av.mine, extra), B = teamLine(p.current.theirs, p.players.theirs, av.theirs);
   const prob = {};
   for (const c of CATS9) {
     let diff = A.tot[c] - B.tot[c], v;
@@ -916,7 +921,7 @@ function rosterGuideCard(d) {
 const CATS9 = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%"];
 
 // ---- Daily lineup page (#lineup): one day's players with a game, who ESPN starts, and who to start ----
-const lineup = { day: null };  // ISO date picked; null = today (or the next day with games)
+const lineup = { day: null, choice: {} };  // ISO date picked (null = today or the next day with games); starters chosen per day
 
 // Can all these players (each a list of eligible slot names) start at once in these slots? (augmenting paths)
 function fitsLineup(players, slots) {
@@ -933,53 +938,92 @@ function fitsLineup(players, slots) {
 function lineupView(d) {
   const days = weekDays(d), iso = x => x.toLocaleDateString("en-CA");
   const rows = d.planner.mine, today = d.week.today;
-  const playing = i => rows.filter(r => r.opps[i] && r.days[i] !== "off");
+  const hasGame = (r, k) => !!r.opps[k] && r.days[k] !== "off";
+  const avail = (r, k) => hasGame(r, k) && r.days[k] !== "out";
   let i = days.findIndex(x => iso(x) === lineup.day);
-  if (i < 0) i = Math.max(0, days.findIndex((x, k) => iso(x) >= today && playing(k).length));
+  if (i < 0) i = Math.max(0, days.findIndex((x, k) => iso(x) >= today && rows.some(r => avail(r, k))));
+  const day = iso(days[i]), past = day < today;
+  const slotOf = r => (r.dslots ? r.dslots[i] : r.slot);
+  const onTeam = rows.filter(r => slotOf(r));
   const slots = d.lineup || null;
-  const spots = slots ? slots.length : rows.filter(r => !["BE", "IR"].includes(r.slot)).length;
-  const avail = playing(i).filter(r => r.days[i] !== "out");
-  // best lineup by projected per-game value that fits the slots (greedy is optimal for slot matching)
+  const spots = slots ? slots.length : onTeam.filter(r => !["BE", "IR"].includes(slotOf(r))).length;
+  const espnOn = r => !["BE", "IR"].includes(slotOf(r));  // in ESPN's starting lineup that day
+  // suggestion: the highest projected value that fits the slots (greedy over a slot matching is optimal)
   const pick = [];
-  for (const r of [...avail].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))) {
+  for (const r of onTeam.filter(r => avail(r, i)).sort((a, b) => (b.value ?? 0) - (a.value ?? 0))) {
     if (pick.length >= spots) break;
     if (!slots || fitsLineup([...pick, r].map(x => x.elig || []), slots)) pick.push(r);
   }
-  const chosen = new Set(pick.map(r => r.id));
-  const espnStart = r => r.days[i] === "start" || r.days[i] === "dnp";
-  const ins = avail.filter(r => chosen.has(r.id) && !espnStart(r)), outs = avail.filter(r => !chosen.has(r.id) && espnStart(r));
-  const order = r => (r.days[i] === "out" ? 2 : chosen.has(r.id) ? 0 : 1);
-  const list = playing(i).sort((a, b) => order(a) - order(b) || (b.value ?? 0) - (a.value ?? 0));
+  const suggested = new Set(pick.map(r => r.id));
+  // your choices for this day: {player id: starts?} on top of ESPN's lineup
+  const ov = lineup.choice[day] || {};
+  const starts = r => ov[r.id] ?? espnOn(r);
+  const sugOv = Object.fromEntries(onTeam.filter(r => avail(r, i)).map(r => [r.id, suggested.has(r.id)]));
+  // what your choices change this week: started games that count now minus ones ESPN's lineup counted
+  const counts = (r, on) => on && avail(r, i) && !past;
+  const extra = Object.fromEntries(KEYS.map(k => [k, 0]));
+  for (const r of onTeam) {
+    const delta = (counts(r, starts(r)) ? 1 : 0) - (counts(r, espnOn(r)) ? 1 : 0);
+    if (delta) for (const k of KEYS) extra[k] += delta * (r.avg[k] || 0);
+  }
+  const playingNow = onTeam.filter(r => starts(r) && avail(r, i));
+  const valid = !slots || fitsLineup(playingNow.map(r => r.elig || []), slots);
+  const changed = onTeam.some(r => starts(r) !== espnOn(r));
   const cols = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"];
-  const espn = r => ({ start: "Starting", bench: "Bench", out: "OUT", dnp: "Started · DNP" })[r.days[i]] || r.days[i];
-  const body = list.map(r => {
-    const sug = r.days[i] === "out" ? "—" : chosen.has(r.id) ? "Start" : "Sit";
-    const change = (chosen.has(r.id) && !espnStart(r)) || (!chosen.has(r.id) && espnStart(r) && r.days[i] !== "out");
-    return `<tr class="${change ? "lu-change" : ""}"><td><b class="${sug === "Start" ? "pos" : sug === "Sit" ? "neg" : ""}">${sug}</b></td>
-      <td class="${r.days[i] === "out" ? "st-out" : ""}">${espn(r)}</td>
+  const order = [...(slots || []), "BE", "IR"];
+  const rank = r => { const k = order.indexOf(slotOf(r)); return k < 0 ? order.length - 2 : k; };
+  const slotName = x => ({ UT: "UTIL", BE: "Bench" })[x] || x;
+  const body = [...onTeam].sort((a, b) => rank(a) - rank(b) || (b.value ?? 0) - (a.value ?? 0)).map(r => {
+    const g = hasGame(r, i), out = r.days[i] === "out";
+    const toggle = !g ? `<span class="muted">No game</span>` : out ? `<span class="inj">OUT</span>` : past ? `<span class="muted">${espnOn(r) ? "Started" : "Bench"}</span>`
+      : `<button class="switch" role="switch" data-lstart="${r.id}" aria-checked="${starts(r)}" aria-label="${esc(r.name)} starts">${starts(r) ? "Start" : "Sit"}</button>`;
+    const sug = g && !out ? (suggested.has(r.id) ? "Start" : "Sit") : "";
+    return `<tr class="${starts(r) !== espnOn(r) ? "lu-change" : ""}${g ? "" : " lu-idle"}">
+      <td class="lu-slot">${slotName(slotOf(r))}</td>
       <th scope="row"><img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"> ${esc(r.name)}${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}
-        <small>${esc(r.team)} · ${esc((r.elig || []).filter(x => !x.includes("/") && !["UT", "G", "F"].includes(x)).join(", ") || r.slot)}</small></th>
-      <td>${esc(r.opps[i])}</td>${cols.map(c => `<td>${perGame(c, r.avg[c] || 0)}</td>`).join("")}
-      <td>${perGame("FG%", lineVal(r.avg, "FG%"))}</td><td>${perGame("FT%", lineVal(r.avg, "FT%"))}</td>
-      <td class="${(r.value ?? 0) >= 0 ? "pos" : "neg"}">${(r.value ?? 0) >= 0 ? "+" : ""}${(r.value ?? 0).toFixed(1)}</td></tr>`;
+        <small>${esc(r.team)} · ${esc((r.elig || []).filter(x => ["PG", "SG", "SF", "PF", "C"].includes(x)).join(", "))}</small></th>
+      <td>${g ? esc(r.opps[i]) : "—"}</td><td>${toggle}</td><td class="${sug === "Start" ? "pos" : "neg"}">${sug}</td>
+      ${g ? cols.map(c => `<td>${perGame(c, r.avg[c] || 0)}</td>`).join("") + `<td>${perGame("FG%", lineVal(r.avg, "FG%"))}</td><td>${perGame("FT%", lineVal(r.avg, "FT%"))}</td>
+        <td class="${(r.value ?? 0) >= 0 ? "pos" : "neg"}">${(r.value ?? 0) >= 0 ? "+" : ""}${(r.value ?? 0).toFixed(1)}</td>` : `<td colspan="10"></td>`}</tr>`;
   }).join("");
-  const chips = days.map((x, k) => `<button class="chip day" data-lday="${iso(x)}" aria-pressed="${k === i}">${x.toLocaleDateString(undefined, { weekday: "short" })} ${playing(k).filter(r => r.days[k] !== "out").length}</button>`).join("");
-  const swaps = ins.length || outs.length
-    ? `<p><b>Suggested changes:</b> start ${ins.map(r => esc(r.name)).join(", ") || "—"}; sit ${outs.map(r => esc(r.name)).join(", ") || "—"}.</p>`
-    : `<p class="muted">Your ESPN lineup already matches the suggestion for this day.</p>`;
-  const sw = d.projection ? matchupSummary(d).o.swing : [];
-  return `<section class="card wide"><div class="slate-head"><h2>Daily lineup · ${gameDay(iso(days[i]))}</h2>
-      <span class="muted">${avail.length} available for ${spots} spots${slots ? ` (${esc(slots.join(", "))})` : ""}</span></div>
+  const chips = days.map((x, k) => `<button class="chip day" data-lday="${iso(x)}" aria-pressed="${k === i}">${x.toLocaleDateString(undefined, { weekday: "short" })} ${rows.filter(r => avail(r, k)).length}</button>`).join("");
+  const nAvail = onTeam.filter(r => avail(r, i)).length;
+  return `${d.projection ? lineupTotals(d, extra, changed, day) : ""}
+  <section class="card wide"><div class="slate-head"><h2>Lineup · ${gameDay(day)}</h2>
+      <span class="muted">${nAvail} with a game for ${spots} spots</span></div>
     <div class="day-chips" role="group" aria-label="Day (number of your players with a game)">${chips}</div>
-    ${avail.length > spots ? `<p><b>${avail.length - spots} more available than spots:</b> someone has to sit.</p>` : ""}
-    ${swaps}
-    ${sw.length ? `<p class="muted">Close categories this week: <b>${sw.join(", ")}</b>. When two players are near in value, start the one stronger there.</p>` : ""}
-    <div class="h2h-scroll"><table class="guide lineup"><thead><tr><th scope="col">Suggest</th><th scope="col">ESPN</th><th scope="col">Player</th><th scope="col">Opp</th>
+    ${nAvail > spots ? `<p><b>${nAvail - spots} more with a game than spots:</b> someone has to sit.</p>` : ""}
+    ${!valid ? `<p class="error">These starters don't fit your lineup slots (${esc(slots.join(", "))}): too many at one position. Sit someone.</p>` : ""}
+    ${playingNow.length > spots ? `<p class="error">${playingNow.length} starters with a game for ${spots} spots.</p>` : ""}
+    <div class="lu-actions"><button class="ghost" data-lset="suggest" data-ov='${JSON.stringify(sugOv)}'>Use suggested lineup</button><button class="ghost" data-lset="espn">Reset to ESPN</button></div>
+    <div class="h2h-scroll"><table class="guide lineup"><thead><tr><th scope="col">Slot</th><th scope="col">Player</th><th scope="col">Opp</th><th scope="col">Start / Sit</th><th scope="col">Suggest</th>
       ${cols.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">FG%</th><th scope="col">FT%</th><th scope="col">Value</th></tr></thead>
-      <tbody>${body || `<tr><td colspan="14" class="muted">Nobody on your roster plays this day.</td></tr>`}</tbody></table></div>
-    <p class="muted">Projected stats per game (the site's projection: recent games, plus fresh role news). Suggest = the lineup with the highest
-      total value (9-category impact per game; 0 = average player on the two rosters) that fits your league's slots${slots ? "" : " (slot settings unavailable: counts spots only)"}.
-      ESPN = your lineup as set on ESPN for that day. Highlighted rows differ from ESPN.</p></section>`;
+      <tbody>${body}</tbody></table></div>
+    <p class="muted">Slot = where ESPN has him for this day. Start / Sit begins as ESPN's lineup; flip players to try a lineup (the site can't change ESPN, so set it there).
+      Projected stats are per game. Suggest = the lineup with the highest total value (9-category impact per game; 0 = average player on the two rosters)
+      that fits your slots. Highlighted rows differ from ESPN.${past ? " This day is over: its lineup can't change." : ""}</p></section>`;
+}
+
+// Category totals this week with ESPN's lineup vs with your start/sit choices for the day picked
+function lineupTotals(d, extra, changed, day) {
+  const base = matchupOdds(d), mine = matchupOdds(d, extra);
+  const res = o => Object.fromEntries(CATS9.map(c => [c, cmpCat(c, o.mine[c] || 0, o.theirs[c] || 0)]));
+  const rb = res(base), rm = res(mine), rec = r => tally(r).slice(0, 2).join("-");
+  const pc = x => `${Math.round(x * 100)}%`;
+  const rowsHtml = CATS9.map(c => {
+    const a = base.mine[c] || 0, b = mine.mine[c] || 0, diff = b - a, pct = c.endsWith("%");
+    const moved = Math.abs(diff) > (pct ? 0.0005 : 0.05);
+    const good = c === "TO" ? diff < 0 : diff > 0;
+    return `<tr><th scope="row">${c}</th><td>${fmt(c, a)}</td><td>${moved ? `<b>${fmt(c, b)}</b> <span class="${good ? "pos" : "neg"}">${diff > 0 ? "+" : "−"}${pct ? (Math.abs(diff) * 100).toFixed(1) + " pts" : Math.abs(diff).toFixed(1)}</span>` : fmt(c, b)}</td>
+      <td>${fmt(c, mine.theirs[c] || 0)}</td><td class="${rm[c] === "W" ? "pos" : rm[c] === "L" ? "neg" : ""}">${rm[c]}</td>
+      <td>${pc(base.prob[c])}${Math.round(base.prob[c] * 100) !== Math.round(mine.prob[c] * 100) ? ` → <b>${pc(mine.prob[c])}</b>` : ""}</td></tr>`;
+  }).join("");
+  return `<section class="card wide"><h2>This week's totals · your ${gameDay(day)} lineup</h2>
+    <p><b>Projected ${rec(rb)} · ${base.expected.toFixed(1)} categories expected</b> with ESPN's lineup${changed
+      ? ` → <b>${rec(rm)} · ${mine.expected.toFixed(1)}</b> with your changes (win ${pc(base.win)} → ${pc(mine.win)})` : " · flip Start / Sit below to compare"}.</p>
+    <div class="h2h-scroll"><table class="lu-totals"><thead><tr><th scope="col">Cat</th><th scope="col">ESPN lineup</th><th scope="col">Your lineup</th>
+      <th scope="col">${esc(d.opponent || "Opponent")}</th><th scope="col">Result</th><th scope="col">Win %</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+    <p class="muted">Projected week-end totals: this week so far + the rest of the week, with the day picked using your Start / Sit choices (other days as set on ESPN).</p></section>`;
 }
 
 function plannerView(d) {
@@ -1074,9 +1118,16 @@ function render(d) {
     : matchupCard(d) + rosterCard(d);
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
-$("#app").addEventListener("click", e => {  // daily lineup: pick a day
-  const day = e.target.closest("[data-lday]");
-  if (day) { lineup.day = day.dataset.lday; render(lastData); }
+$("#app").addEventListener("click", e => {  // lineup page: pick a day, flip start/sit, or reset
+  const day = e.target.closest("[data-lday]"), flip = e.target.closest("[data-lstart]"), set = e.target.closest("[data-lset]");
+  if (day) { lineup.day = day.dataset.lday; return render(lastData); }
+  if (!flip && !set) return;
+  const cur = $("#app [data-lday][aria-pressed='true']")?.dataset.lday;
+  if (!cur) return;
+  if (set && set.dataset.lset === "espn") delete lineup.choice[cur];
+  else if (set) lineup.choice[cur] = JSON.parse(set.dataset.ov);
+  else lineup.choice[cur] = { ...(lineup.choice[cur] || {}), [flip.dataset.lstart]: flip.getAttribute("aria-checked") !== "true" };
+  render(lastData);
 });
 // Phone menu: the ☰ button opens the page list; any choice in it, Escape, or a tap outside closes it
 const menu = $(".menu-toggle"), setMenu = open => { document.querySelector("header").classList.toggle("menu-open", open); menu.setAttribute("aria-expanded", open); };
