@@ -784,6 +784,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         next_games=next_games,
         droppable=droppable,
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
+        opp_rem=streaming.remaining(opp_players),
     )
     out["plan"]["opp_current"] = scores(opp_cats)
     out["plan"]["opp_players"] = streaming.rows(opp_players)

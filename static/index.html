@@ -720,10 +720,10 @@ function moveWhy(m) {
     <li><b>Value</b>: ${sign(addV)} per game × ${m.add_games} = ${sign(+(addV * m.add_games).toFixed(1))}, minus ${sign(dropV)} × ${m.drop_games} = ${sign(+(dropV * m.drop_games).toFixed(1))}
       → <b class="${m.value >= 0 ? "pos" : "neg"}">${sign(m.value)}</b>. Per-game value = his 9-cat line compared with every player in the pool (0 = average).</li>
     <li><b>This week's matchup</b>: ${flips.length ? flips.join(" · ") : "no category changes hands"}${moved.length ? `; your projected totals: ${moved.join(" · ")}` : ""}.</li>
-    <li><b>Projection</b>: ${adjText(m.add)}.</li>
+    <li><b>Projected per game</b>: ${name(m.add)}: ${adjText(m.add)}; ${name(m.drop)}: ${adjText(m.drop)}.</li>
     <li><b>Why ${m.kind === "upgrade" ? "an upgrade" : "a stream"}</b>: ${m.kind === "upgrade"
-      ? "adds at least +2 value over this week and next without losing a category this week."
-      : "wins more categories this week while costing at most 4 value over the two weeks."}</li></ul></details>`;
+      ? "no pickup helps this week's matchup any more, so this one is for next week: at least +2 value over this week and next, costing this week only categories that are already decided."
+      : "raises the categories you're expected to win this week (winning this matchup comes first), while costing at most 4 value over the two weeks."}</li></ul></details>`;
 }
 
 function planCard(s) {
@@ -740,13 +740,14 @@ function planCard(s) {
         ${m.games.length ? `counts ${m.games.length} game${m.games.length === 1 ? "" : "s"} this week (${m.games.map(gameDay).join(", ")})` : "no games left this week"} · ${m.next_games} next week</div>
       <div class="rd-wrap">${radar(left, right, m.add.name, m.drop.name)}
         <div class="rd-legend"><div class="rd-head"><span>Projected per game</span><span>9-cat value</span></div>
-          ${[[m.add, "a", "Add"], [m.drop, "b", "Drop"]].map(([x, k, verb]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
+          ${[[m.add, "a", "Add", m.add_stats, m.games.length, 1], [m.drop, "b", "Drop", m.drop_stats, m.drop_week, -1]].map(([x, k, verb, st, n, sign]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
             <img class="pic sm" src="${headshot(x.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-            <span><b>${verb} ${esc(x.name)}</b><small>${adjText(x)}</small></span>
+            <span><b>${verb} ${esc(x.name)}</b><small>${st ? matchupImpact(st, n, sign) : adjText(x)}</small></span>
             <b class="${x.value >= 0 ? "pos" : "neg"}">${x.value >= 0 ? "+" : ""}${(x.value ?? 0).toFixed(1)}</b></div>`).join("")}
           <p class="muted">Bigger on an axis = better there (TO: fewer). Values: <span class="rd-a">add</span> · drop.</p></div></div>
       ${formTable(m)}
-      <div class="meta-line">This week: ${m.week > 0 ? "+" : ""}${m.week} cat${Math.abs(m.week) === 1 ? "" : "s"} · Value this week + next: ${m.value >= 0 ? "+" : ""}${m.value}</div>
+      <div class="meta-line">${m.win ? `<b>Win this matchup: ${Math.round(m.win[0] * 100)}% → ${Math.round(m.win[1] * 100)}%</b> · expected categories ${m.expected[0].toFixed(1)} → ${m.expected[1].toFixed(1)} · `
+        : `This week: ${m.week > 0 ? "+" : ""}${m.week} cat${Math.abs(m.week) === 1 ? "" : "s"} · `}Value this week + next: ${m.value >= 0 ? "+" : ""}${m.value}</div>
       ${moveWhy(m)}</li>`;
   }).join("")}</ol>`
     : '<p class="muted">No pickup improves your projected result with these drops and adds. Try allowing more drops.</p>';
@@ -929,6 +930,15 @@ function vsHead(left, right, mid = "VS") {
 const basisText = x => x.basis === "recent" ? "recent games" : "season averages";
 const adjText = x => x.factor && Math.abs(x.factor - 1) >= 0.005
   ? `Projection: ${basisText(x)} ×${x.factor.toFixed(2)}${x.note ? ` · ${esc(x.note)}` : ""}` : `Projection: ${basisText(x)}`;
+
+// What one side of a move brings to (+) or takes from (−) this week's matchup: games and projected stats
+function matchupImpact(st, games, sign) {
+  const pm = sign > 0 ? "+" : "−";
+  if (!games) return sign > 0 ? "No games left this week" : "No games left this week: costs you nothing now";
+  const parts = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"].filter(c => Math.round(st[c])).map(c => `${pm}${Math.round(st[c])} ${c}`);
+  const shot = (m, a, label) => a >= 0.5 ? [`${label} ${Math.round(m)}/${Math.round(a)}`] : [];
+  return `This week: ${pm}${games} game${games === 1 ? "" : "s"} · ${[...parts, ...shot(st.FGM, st.FGA, "FG"), ...shot(st.FTM, st.FTA, "FT")].join(" · ")}`;
+}
 
 // The add's and drop's last 3 games, then their games ahead (this week and next) with opponents
 function formTable(m) {
