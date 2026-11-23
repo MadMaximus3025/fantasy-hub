@@ -395,6 +395,15 @@ scrub.pending_until, scrub.pending = TODAY, "Dropped after today"
 out2 = server.stream(drops="51", plan=True)
 assert 51 not in [r["id"] for r in out2["roster"]] and out2["plan"]["moves"] == [], out2["plan"]["moves"]
 del scrub.pending_until, scrub.pending
+# scouting: same matchup from the opponent's side; your odds are 1 - his, his worst case is his best plan
+server._scout.clear()
+sc = server.scout()
+assert sc["opponent"] == opp.team_name and sc["acquisitions"]["left"] == 2, sc.keys()
+assert sc["worst"]["expected"] <= sc["now"]["expected"] + 1e-9, (sc["now"], sc["worst"])  # his streaming never helps you
+assert abs(sc["now"]["expected"] - sum(sc["now"]["prob"].values())) < 0.02  # expected = your chances summed
+assert {r["name"] for r in sc["roster"]} == {p.name for p in opp.roster} and all("form" in r and "games_left" in r for r in sc["roster"])
+assert server.scout() is sc  # cached
+server._scout.clear()
 server.connect, server.free_agents, server.day_lineups, server.acquisitions_left, server.datetime = saved
 
 # free agents: an entry that can't be read is skipped, the rest still come back

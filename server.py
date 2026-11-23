@@ -805,11 +805,8 @@ def acquisitions_left(league, me, first, last, week):
     return info
 
 
-@app.get("/api/stream")
-def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int | None, Query(ge=0, le=20)] = None,
-           plan: bool = False):
-    """Your roster and acquisitions left; with plan=true, the best week of free-agent pickups."""
-    league, me = connect()
+def matchup_setup(league, me):
+    """This week's matchup as every planning page sees it: dates, both teams' live totals, daily lineups, pending moves."""
     now = datetime.now()
     today, week = now.date(), league.currentMatchupPeriod
     first, last = week_dates(league, week, today)
@@ -821,7 +818,46 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
         pending_moves(team, rosters, today, league)
         league_order(team.roster, today)
-    keepers =[p for p in me.roster if not hasattr(p, "pending_until")]  # pending drops are gone for planning purposes
+    return now, today, week, first, last, opp, my_cats, opp_cats, lineups
+
+
+def plan_inputs(league, me, opp, now, today, week, first, last, lineups):
+    """Planner entries for both rosters and the healthy free agents, all with the site's projection, plus per-game
+    values and next week's games: (mine, opponent's, free agents, values, next_games)."""
+    # only healthy free agents: OUT, injured reserve, day-to-day or suspended players can't be counted on to play
+    fas = [p for p in free_agents(league) if healthy(p)]
+    news = player_news(league, me.roster + fas + opp.roster)  # same recipe for both teams and free agents
+    project_players(me.roster + fas + opp.roster, news, now, game_logs(me.roster + fas + opp.roster))
+    next_first, next_last = week_dates(league, week + 1, today)
+
+    def entry(p, team_id, name=None):
+        """A player for the planner, with the site's projection, his last 3 games and his games through next week."""
+        lines = game_lines(p, team_id, lineups, now, first, last)
+        season = {k: season_avg(p).get(k, 0) for k in streaming.KEYS}  # what ESPN shows
+        ahead = sorted((g for g in p.schedule.values() if today <= g["date"].date() <= next_last), key=lambda g: g["date"])
+        return {"id": p.playerId, "name": name or p.name, "note": p.proj_why, "per_game": proj_avg(p),
+                "season": season, "factor": p.proj_factor, "basis": p.proj_basis, "recent": p.recent,
+                "elig": [x for x in p.eligibleSlots if x not in ("BE", "IR")],  # lineup slots he can fill
+                "upcoming": [{"date": g["date"].date().isoformat(), "opp": g["team"]} for g in ahead],
+                "games" if team_id else "lines": lines}
+
+    opp_players = [entry(p, opp.team_id) for p in opp.roster]
+    mine = [entry(p, me.team_id) for p in me.roster]
+    fa_entries = [entry(p, None, f"{p.name} ({p.proTeam})") for p in fas]
+    values = streaming.player_values({e["id"]: e["per_game"] for e in mine + fa_entries + opp_players})
+    # games in next week's matchup; nothing for anyone OUT now, since his return date is unknown
+    next_games = {p.playerId: 0 if p.injuryStatus == "OUT" else
+                  sum(next_first <= x["date"].date() <= next_last for x in p.schedule.values()) for p in me.roster + opp.roster + fas}
+    return mine, opp_players, fa_entries, values, next_games
+
+
+@app.get("/api/stream")
+def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int | None, Query(ge=0, le=20)] = None,
+           plan: bool = False):
+    """Your roster and acquisitions left; with plan=true, the best week of free-agent pickups."""
+    league, me = connect()
+    now, today, week, first, last, opp, my_cats, opp_cats, lineups = matchup_setup(league, me)
+    keepers = [p for p in me.roster if not hasattr(p, "pending_until")]  # pending drops are gone for planning purposes
     acquisitions = acquisitions_left(league, me, first, last, week)
     out = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
            "opponent": opp.team_name if opp else None,
@@ -835,31 +871,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         return out
     roster_ids = {p.playerId for p in keepers}  # a player already dropped can't be dropped again
     droppable = {int(x) for x in drops.split(",") if x.strip().isdigit()} & roster_ids
-    # only healthy free agents: OUT, injured reserve, day-to-day or suspended players can't be counted on to play
-    fas = [p for p in free_agents(league) if healthy(p)]
-    news = player_news(league, me.roster + fas + opp.roster)  # same recipe for both teams and free agents
-    project_players(me.roster + fas + opp.roster, news, now, game_logs(me.roster + fas + opp.roster))
-
-    next_first, next_last = week_dates(league, week + 1, today)
-
-    def entry(p, team_id, news_items, name=None):
-        """A player for the planner, with the site's projection, his last 3 games and his games through next week."""
-        lines = game_lines(p, team_id, lineups, now, first, last)
-        season = {k: season_avg(p).get(k, 0) for k in streaming.KEYS}  # what ESPN shows
-        ahead = sorted((g for g in p.schedule.values() if today <= g["date"].date() <= next_last), key=lambda g: g["date"])
-        return {"id": p.playerId, "name": name or p.name, "note": p.proj_why, "per_game": proj_avg(p),
-                "season": season, "factor": p.proj_factor, "basis": p.proj_basis, "recent": p.recent,
-                "elig": [x for x in p.eligibleSlots if x not in ("BE", "IR")],  # lineup slots he can fill
-                "upcoming": [{"date": g["date"].date().isoformat(), "opp": g["team"]} for g in ahead],
-                "games" if team_id else "lines": lines}
-
-    opp_players = [entry(p, opp.team_id, []) for p in opp.roster]
-    mine = [entry(p, me.team_id, news.get(p.playerId, [])) for p in me.roster]
-    fa_entries = [entry(p, None, news.get(p.playerId, []), f"{p.name} ({p.proTeam})") for p in fas]
-    values = streaming.player_values({e["id"]: e["per_game"] for e in mine + fa_entries + opp_players})
-    # games in next week's matchup; nothing for anyone OUT now, since his return date is unknown
-    next_games = {p.playerId: 0 if p.injuryStatus == "OUT" else
-                  sum(next_first <= x["date"].date() <= next_last for x in p.schedule.values()) for p in keepers + fas}
+    mine, opp_players, fa_entries, values, next_games = plan_inputs(league, me, opp, now, today, week, first, last, lineups)
     out["plan"] = streaming.plan(
         days=days_between(max(today, first), last),
         slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR") and not hasattr(p, "pending_from")),  # today's starting spots
@@ -880,6 +892,78 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     for r in out["roster"]:  # overall value next to each name helps decide who is safe to drop
         r["value"] = round(values.get(r["id"], 0), 1)
     return out
+
+
+_scout = {}  # week -> (time, report); a report downloads every free agent's game log, so keep it 5 minutes
+SCOUT_DROPS = 3  # the worst case lets the opponent drop his this many lowest-value bench players
+
+
+@app.get("/api/scout")
+def scout(refresh: bool = False):
+    """Your opponent this week: adds left, what his best streaming could do to the matchup, what he'd need in each
+    category you lead, and his roster's recent form."""
+    league, me = connect()
+    hit = _scout.get(league.currentMatchupPeriod)
+    if hit and time.time() - hit[0] < (60 if refresh else CACHE_SECONDS):
+        return hit[1]
+    now, today, week, first, last, opp, my_cats, opp_cats, lineups = matchup_setup(league, me)
+    if not opp:
+        return {"opponent": None}
+    mine, theirs, fa_entries, values, next_games = plan_inputs(league, me, opp, now, today, week, first, last, lineups)
+    acq = acquisitions_left(league, opp, first, last, week)
+    keepers = [p for p in opp.roster if not hasattr(p, "pending_until")]
+    ir_spots, ir_ids = ir_open(league, keepers)
+    # worst case: he streams as well as the planner can, dropping his weakest healthy bench players
+    bench = sorted((p for p in keepers if p.lineupSlot == "BE" and p.injuryStatus != "OUT"), key=lambda p: values.get(p.playerId, 0))
+    his_plan = streaming.plan(
+        days=days_between(max(today, first), last),
+        slots=sum(1 for p in opp.roster if p.lineupSlot not in ("BE", "IR")),
+        mine=theirs, opp_totals=streaming.totals(scores(my_cats), mine), current=scores(opp_cats),
+        free_agents=fa_entries, values=values, next_games=next_games,
+        droppable={p.playerId for p in bench[:SCOUT_DROPS]},
+        acquisitions=acq["left"] if acq["left"] is not None else (acq["limit"] or 0),
+        opp_rem=streaming.remaining(mine), lineup=lineup_slots(league), ir_spots=ir_spots, ir_ids=ir_ids)
+    flip = {"W": "L", "L": "W", "T": "T"}  # his plan is from his side; the page shows yours
+    yours = lambda side: {"record": streaming.record({c: flip[r] for c, r in side["result"].items()}),
+                          "expected": round(9 - side["expected"], 2), "result": {c: flip[r] for c, r in side["result"].items()}}
+    before_mine, before_his = streaming.totals(scores(my_cats), mine), his_plan["before"]["mine"]
+    prob_now = {c: round(1 - v, 3) for c, v in his_plan["before"]["prob"].items()}  # your chance = 1 - his
+    prob_worst = {c: round(1 - v, 3) for c, v in his_plan["after"]["prob"].items()}
+    # what he'd need in each category you lead: the gap in his best streamers' games (counting categories)
+    gaps = {}
+    for c in streaming.CATS:
+        a, b = before_mine[c], before_his[c]
+        lead = (b - a) if c == "TO" else (a - b)
+        if lead <= 0:
+            continue
+        if c in ("FG%", "FT%"):
+            gaps[c] = {"lead": round(lead, 3)}
+        elif c == "TO":
+            gaps[c] = {"lead": round(lead, 1), "note": "adding players only adds turnovers"}
+        else:
+            best = sorted((e["per_game"].get(c, 0) for e in fa_entries), reverse=True)[:5]
+            per = sum(best) / len(best) if best else 0
+            gaps[c] = {"lead": round(lead, 1), "per_game": round(per, 2), "games": -(-lead // per) if per else None}
+    # his roster: games left, last 3 games, hot/cold (last 3 games vs projection, in 9-cat value), key categories
+    z = streaming.zscorer({e["id"]: e["per_game"] for e in theirs + mine})
+    roster = []
+    for p, e in zip(opp.roster, theirs):
+        recent = e["recent"] or []
+        last3 = {k: sum(g[k] for g in recent) / len(recent) for k in streaming.KEYS} if recent else None
+        form = round(sum(z(last3).values()) - sum(z(e["per_game"]).values()), 1) if last3 else None
+        roster.append({"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
+                       "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None,
+                       "pending": getattr(p, "pending", None), "games_left": len(e["games"]), "recent": recent,
+                       "per_game": e["per_game"], "value": round(values.get(p.playerId, 0), 1), "form": form,
+                       "top": [c for c, _ in sorted(z(e["per_game"]).items(), key=lambda kv: -kv[1])[:2]]})
+    report = {"opponent": opp.team_name, "week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
+              "acquisitions": acq, "ir": {"open": ir_spots},
+              "now": {**yours(his_plan["before"]), "prob": prob_now},
+              "worst": {**yours(his_plan["after"]), "prob": prob_worst, "moves": his_plan["moves"]},
+              "mine": before_mine, "theirs": before_his, "theirs_worst": his_plan["after"]["mine"],
+              "gaps": gaps, "roster": roster, "updated": datetime.now(timezone.utc).isoformat()}
+    _scout[week] = (time.time(), report)
+    return report
 
 
 @app.get("/api/dashboard")

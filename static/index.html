@@ -328,7 +328,7 @@
   .error { color:var(--loss); padding:var(--sp-4); }
   /* phones: the page links fold into a ☰ menu that opens as a stacked list under the header */
   .menu-toggle { display:none; }
-  @media (max-width: 960px) {
+  @media (max-width: 1000px) {
     header { position:relative; flex-wrap:nowrap; align-items:flex-start; }
     .menu-toggle { display:inline-flex; justify-content:center; width:44px; height:44px; padding:0; background:transparent; color:var(--text); border:2px solid var(--text); }
     .menu-toggle svg { width:20px; height:20px; }
@@ -357,7 +357,7 @@
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
     <button class="menu-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="pages"><svg class="i-open" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><svg class="i-close" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#today">Today</a><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
+    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#today">Today</a><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#scout">Scouting</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -927,6 +927,82 @@ function rosterGuideCard(d) {
 const CATS9 = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%"];
 
 
+// ---- Scouting page (#scout): the opponent's games, adds, worst-case streaming and roster form ----
+const scout = { data: null, loading: false, error: null };
+
+async function loadScout(refresh = false) {
+  scout.loading = true;
+  try {
+    const r = await fetch("/api/scout" + (refresh ? "?refresh=true" : ""));
+    const j = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));
+    if (!r.ok) throw new Error(j.detail);
+    scout.data = j; scout.error = null;
+  } catch (e) { scout.error = e.message; }
+  scout.loading = false;
+  if (["#scout", "#today"].includes(location.hash) && lastData) render(lastData);
+}
+
+// categories where his best streaming would cut your chance by 10+ points
+const atRisk = sc => CATS9.filter(c => sc.now.prob[c] - sc.worst.prob[c] >= 0.10);
+
+function scoutView(d) {
+  const sc = scout.data;
+  if (!sc) {
+    if (!scout.loading && !scout.error) loadScout();
+    return `<section class="card wide">${scout.error ? `<p class="error">Could not load: ${esc(scout.error)}</p>` : '<p class="muted">Scouting your opponent… (checks every free agent he could add; can take ~30 seconds)</p>'}</section>`;
+  }
+  if (!sc.opponent) return `<section class="card wide"><h2>Scouting</h2><p class="muted">Bye week: no opponent.</p></section>`;
+  const pc = x => `${Math.round(x * 100)}%`, a = sc.acquisitions || {}, risk = atRisk(sc);
+  const days = weekDays(d), today = d.week.today, spots = (d.lineup || []).length || 10;
+  const mine = d.slate.mine, his = d.slate.theirs || mine.map(() => 0);
+  const future = days.map(x => isoDay(x) >= today);
+  const left = arr => arr.reduce((t, n, k) => t + (future[k] ? n : 0), 0);
+  const dayRows = days.map((x, k) => `<tr class="${future[k] ? "" : "lu-idle"}"><th scope="row">${gameDay(isoDay(x))}</th><td>${mine[k]}</td><td>${his[k]}</td>
+    <td>${future[k] ? Math.max(0, spots - his[k]) : "—"}</td></tr>`).join("");
+  const adds = a.left != null ? `${a.left} left (${a.used} of ${a.limit} used)` : a.limit != null ? `limit ${a.limit} a week; used unknown` : "unknown";
+  const catRows = CATS9.map(c => {
+    const g = sc.gaps[c], m = sc.mine[c] || 0, h = sc.theirs[c] || 0, hw = sc.theirs_worst[c] || 0;
+    const need = !g ? `<span class="muted">${cmpCat(c, m, h) === "T" ? "tied" : "you trail"}</span>` : g.note ? esc(g.note)
+      : c.endsWith("%") ? `lead ${(g.lead * 100).toFixed(1)} pts` : g.games != null ? `≈${g.games} streamer game${g.games === 1 ? "" : "s"} (+${g.lead})` : `+${g.lead}`;
+    const drop = sc.now.prob[c] - sc.worst.prob[c];
+    return `<tr class="${risk.includes(c) ? "lu-change" : ""}"><th scope="row">${c}</th><td>${fmt(c, m)}</td><td>${fmt(c, h)}${Math.abs(hw - h) > (c.endsWith("%") ? 0.0005 : 0.05) ? ` → <b>${fmt(c, hw)}</b>` : ""}</td>
+      <td>${need}</td><td>${pc(sc.now.prob[c])}</td><td class="${drop >= 0.1 ? "neg" : ""}">${pc(sc.worst.prob[c])}</td></tr>`;
+  }).join("");
+  const moves = (sc.worst.moves || []).map(m => `<li>${gameDay(m.day)}: ${m.ir ? `moves ${esc(m.drop.name)} to IR` : `drops ${esc(m.drop.name)}`}, adds <b>${esc(m.add.name)}</b> (${m.games.length} game${m.games.length === 1 ? "" : "s"} this week)</li>`).join("");
+  const formTag = f => f == null ? "—" : f >= 1.5 ? `<b class="pos">Hot ${f > 0 ? "+" : ""}${f}</b>` : f <= -1.5 ? `<b class="neg">Cold ${f}</b>` : `${f > 0 ? "+" : ""}${f}`;
+  const slotName = x => ({ UT: "UTIL", BE: "Bench" })[x] || x;
+  const order = ["PG", "SG", "SF", "PF", "C", "G", "F", "SG/SF", "G/F", "PF/C", "F/C", "UT", "BE", "IR"];
+  const rank = r => { const k = order.indexOf(r.slot); return k < 0 ? order.length : k; };
+  const rosterRows = [...sc.roster].sort((x, y) => rank(x) - rank(y) || y.value - x.value).map(r => {
+    const last = (r.recent || []).map(g => `${+g.PTS}/${+g.REB}/${+g.AST}`).join(" · ");
+    return `<tr><td class="lu-slot">${slotName(r.slot)}</td><th scope="row"><img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"> ${esc(r.name)}${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}${r.pending ? ` <span class="pend">${esc(r.pending)}</span>` : ""}<small>${esc(r.team)}</small></th>
+      <td>${r.games_left}</td><td>${last || "—"}</td><td>${formTag(r.form)}</td><td>${esc((r.top || []).join(", "))}</td>
+      <td class="${r.value >= 0 ? "pos" : "neg"}">${r.value >= 0 ? "+" : ""}${r.value.toFixed(1)}</td></tr>`;
+  }).join("");
+  return `<section class="card wide"><h2>Scouting · ${esc(sc.opponent)}</h2>
+    <ul class="todo">
+      <li><b>His adds this week:</b> ${adds}.</li>
+      <li><b>Starts left:</b> you ${left(mine)} · him ${left(his)}${left(his) > left(mine) ? ` <span class="neg">(+${left(his) - left(mine)} for him)</span>` : ""}.</li>
+      <li><b>Now:</b> Projected ${sc.now.record.replace(/-0$/, "")} · ${sc.now.expected.toFixed(1)} categories expected.
+        <b>If he streams hard:</b> ${sc.worst.record.replace(/-0$/, "")} · ${sc.worst.expected.toFixed(1)}.
+        ${risk.length ? `<span class="neg">At risk: <b>${risk.join(", ")}</b>.</span>` : "No category is at real risk."}</li>
+    </ul></section>
+  <section class="card wide"><h2>What he'd need</h2>
+    <div class="h2h-scroll"><table class="lu-totals"><thead><tr><th scope="col">Cat</th><th scope="col">You</th><th scope="col">${esc(sc.opponent)}${sc.worst.moves?.length ? " (→ if he streams)" : ""}</th>
+      <th scope="col">He needs</th><th scope="col">Win % now</th><th scope="col">If he streams</th></tr></thead><tbody>${catRows}</tbody></table></div>
+    ${moves ? `<p><b>His best moves</b> (with his ${a.left ?? "?"} adds, dropping his weakest bench players or using IR):</p><ol class="moves">${moves}</ol>` : '<p class="muted">No free-agent move helps him this week.</p>'}
+    <p class="muted">Projected week-end totals. "If he streams" = the Streaming planner run for him: his best available free agents on his open lineup days, up to his adds left.
+      A ceiling: most opponents don't stream this well. Streamer games = his gap ÷ the top 5 free agents' per-game average in that category.</p></section>
+  <section class="card"><h2>Games per day</h2>
+    <div class="h2h-scroll"><table class="lu-totals"><thead><tr><th scope="col">Day</th><th scope="col">You</th><th scope="col">Him</th><th scope="col">His open spots</th></tr></thead>
+      <tbody>${dayRows}</tbody></table></div>
+    <p class="muted">Starters with a game each day (ESPN lineups); open spots = ${spots} lineup spots minus his starters, where a streamer could play.</p></section>
+  <section class="card"><h2>His roster</h2>
+    <div class="h2h-scroll"><table class="guide lineup"><thead><tr><th scope="col">Slot</th><th scope="col">Player</th><th scope="col">Games left</th><th scope="col">Last 3 (PTS/REB/AST)</th>
+      <th scope="col">Form</th><th scope="col">Strong in</th><th scope="col">Value</th></tr></thead><tbody>${rosterRows}</tbody></table></div>
+    <p class="muted">Form = his last 3 games against his projection, in 9-category value (Hot ≥ +1.5, Cold ≤ −1.5). Value = projected per-game 9-category impact.</p></section>`;
+}
+
 // ---- Today page (#today): the morning to-do list: matchup, lineup changes, pickups, injuries ----
 function todayView(d) {
   const days = weekDays(d), today = d.week.today, rows = d.planner.mine;
@@ -962,7 +1038,14 @@ function todayView(d) {
     items.push(`<li><b>Pickups today:</b> ${todays.length ? todays.map(say).join("; ") + " — before tip-off." : sp ? "none needed." : "mark who can go on Streaming to get suggestions."}
       ${later.length ? `<br><span class="muted">Later this week: ${later.map(m => `${gameDay(m.day)}: ${say(m)}`).join("; ")}.</span>` : ""} <a href="#streaming">Streaming</a></li>`);
   }
-  // 4. health: injured players with a game today or still in the plans, with their latest injury news
+  // 4. the opponent: adds left and what his best streaming could do (Scouting page)
+  if (d.projection) {
+    const sc = scout.data;
+    if (!sc && !scout.loading && !scout.error) loadScout();
+    items.push(`<li><b>Opponent:</b> ${!sc ? '<span class="muted">scouting…</span>' : !sc.opponent ? "bye week." : `${sc.acquisitions?.left ?? "?"} adds left; if he streams hard you'd be ${sc.worst.record.replace(/-0$/, "")} (${sc.worst.expected.toFixed(1)} expected).
+      ${atRisk(sc).length ? `<span class="neg">Protect <b>${atRisk(sc).join(", ")}</b>.</span>` : "Nothing at real risk."}`} <a href="#scout">Scouting</a></li>`);
+  }
+  // 5. health: injured players with a game today or still in the plans, with their latest injury news
   const news = Object.fromEntries((d.roster || []).map(p => [p.id, (p.news || []).find(n => n.kind === "Injury")]));
   const hurt = rows.filter(r => r.injury && (i < 0 || r.opps[i]));
   items.push(`<li><b>Health:</b> ${hurt.length ? `<ul>${hurt.map(r => `<li>${esc(r.name)} <span class="inj">${esc(r.injury.replace("_", " "))}</span>${news[r.id] ? ` · ${esc(news[r.id].headline)}` : ""}</li>`).join("")}</ul>` : "no injured players with a game."}</li>`);
@@ -1188,10 +1271,10 @@ let lastData = null;
 
 function render(d) {
   lastData = d;
-  const page = ["#today", "#planner", "#lineup", "#streaming", "#accuracy"].includes(location.hash) ? location.hash : "#";
+  const page = ["#today", "#planner", "#lineup", "#streaming", "#scout", "#accuracy"].includes(location.hash) ? location.hash : "#";
   $("#app").classList.toggle("planner", page !== "#");
   document.querySelectorAll(".nav-row a").forEach(a => a.getAttribute("href") === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
-  $("#app").innerHTML = page === "#today" ? todayView(d) : page === "#planner" ? plannerView(d) : page === "#lineup" ? lineupView(d) : page === "#streaming" ? streamView() : page === "#accuracy" ? accuracyView()
+  $("#app").innerHTML = page === "#today" ? todayView(d) : page === "#planner" ? plannerView(d) : page === "#lineup" ? lineupView(d) : page === "#scout" ? scoutView(d) : page === "#streaming" ? streamView() : page === "#accuracy" ? accuracyView()
     : matchupCard(d) + rosterCard(d);
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
