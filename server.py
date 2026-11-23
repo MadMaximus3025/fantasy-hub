@@ -1006,9 +1006,17 @@ def total(lines):
 def pickup_record(league, me, today):
     """Your adds from ESPN's activity log, each graded on real games: the added player's games from the add day to the end
     of that Monday-Sunday week vs the dropped player's games over the same days (whoever he played for)."""
-    # shortcut: the league's 100 latest moves; a busy league pushes older ones out. Store moves if a full season is needed.
+    # ESPN returns the activity feed a slice at a time; page back through it (shortcut: at most 10 pages of 100 messages)
+    feed, seen = [], set()
+    for offset in range(0, 1000, 100):
+        page = league.recent_activity(size=100, offset=offset)
+        new = [a for a in page if (a.date, repr(a)) not in seen]
+        if not new:
+            break
+        seen.update((a.date, repr(a)) for a in new)
+        feed += new
     moves = []
-    for a in league.recent_activity(size=100):
+    for a in feed:
         acts = [(action, player) for team, action, player, *_ in a.actions if getattr(team, "team_id", None) == me.team_id]
         adds = [pl for action, pl in acts if action in ("FA ADDED", "WAIVER ADDED")]
         drops = [pl for action, pl in acts if action == "DROPPED"]

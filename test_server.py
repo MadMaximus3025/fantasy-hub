@@ -612,7 +612,7 @@ assert server.cat_verdict(dict(z0, FGM=1, FGA=2), z0)["FG%"] == "W"  # no attemp
 real_log, real_dt = server.fetch_gamelog, server.datetime
 mon_add = datetime(2026, 11, 16, 9).timestamp() * 1000  # Monday morning
 act = NS(date=mon_add, actions=[(me, "FA ADDED", "Adder", ""), (me, "DROPPED", "Dropper", ""), (opp, "FA ADDED", "Other", "")])
-rec_league = NS(recent_activity=lambda size: [act], player_map={"Adder": 801, "Dropper": 802, 801: "Adder", 802: "Dropper"})
+rec_league = NS(recent_activity=lambda size, offset=0: [act] if offset == 0 else [], player_map={"Adder": 801, "Dropper": 802, 801: "Adder", 802: "Dropper"})
 g = lambda d, pts, mins="30": {"date": d, "opp": "BOS", "at": "@", "result": "", "stats": {"MIN": mins, "FG%": "5-10", "FT%": "2-2",
      "3PM": "1", "PTS": str(pts), "REB": "4", "AST": "3", "STL": "1", "BLK": "0", "TO": "2"}}
 server.fetch_gamelog = lambda pid, season: {801: [g("2026-11-18", 20), g("2026-11-16", 15), g("2026-11-14", 99)],  # 11/14: before the add
