@@ -872,6 +872,9 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     roster_ids = {p.playerId for p in keepers}  # a player already dropped can't be dropped again
     droppable = {int(x) for x in drops.split(",") if x.strip().isdigit()} & roster_ids
     mine, opp_players, fa_entries, values, next_games = plan_inputs(league, me, opp, now, today, week, first, last, lineups)
+    # his best streaming (Scouting's worst case), so your moves also protect the categories he could take
+    _, his_plan = worst_case(league, opp, mine, opp_players, fa_entries, values, next_games, my_cats, opp_cats, today, first, last, week)
+    his_rem = {k: sum(r[k] for r in his_plan["players"]) for k in streaming.KEYS}
     out["plan"] = streaming.plan(
         days=days_between(max(today, first), last),
         slots=sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR") and not hasattr(p, "pending_from")),  # today's starting spots
@@ -886,6 +889,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         opp_rem=streaming.remaining(opp_players),
         lineup=lineup_slots(league),
         ir_spots=ir_spots, ir_ids=ir_ids,
+        opp_worst={"totals": his_plan["after"]["mine"], "rem": his_rem} if his_plan["moves"] else None,
     )
     out["plan"]["opp_current"] = scores(opp_cats)
     out["plan"]["opp_players"] = streaming.rows(opp_players)
@@ -896,6 +900,27 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
 
 _scout = {}  # week -> (time, report); a report downloads every free agent's game log, so keep it 5 minutes
 SCOUT_DROPS = 3  # the worst case lets the opponent drop up to this many bench players a free agent beats
+
+
+def worst_case(league, opp, mine, theirs, fa_entries, values, next_games, my_cats, opp_cats, today, first, last, week):
+    """(his adds info, his best streaming plan): the Streaming planner run for the opponent against your roster as is.
+    He may drop only bench players his best free agent beats per game (nobody releases a star who just happens to have
+    no games this week), up to SCOUT_DROPS, or use his open IR spots; up to his adds left."""
+    acq = acquisitions_left(league, opp, first, last, week)
+    keepers = [p for p in opp.roster if not hasattr(p, "pending_until")]
+    ir_spots, ir_ids = ir_open(league, keepers)
+    best_fa = max((values.get(e["id"], 0) for e in fa_entries), default=0)
+    bench = sorted((p for p in keepers if p.lineupSlot == "BE" and p.injuryStatus != "OUT" and values.get(p.playerId, 0) < best_fa),
+                   key=lambda p: values.get(p.playerId, 0))
+    his_plan = streaming.plan(
+        days=days_between(max(today, first), last),
+        slots=sum(1 for p in opp.roster if p.lineupSlot not in ("BE", "IR")),
+        mine=theirs, opp_totals=streaming.totals(scores(my_cats), mine), current=scores(opp_cats),
+        free_agents=fa_entries, values=values, next_games=next_games,
+        droppable={p.playerId for p in bench[:SCOUT_DROPS]},
+        acquisitions=acq["left"] if acq["left"] is not None else (acq["limit"] or 0),
+        opp_rem=streaming.remaining(mine), lineup=lineup_slots(league), ir_spots=ir_spots, ir_ids=ir_ids)
+    return acq, his_plan
 
 
 @app.get("/api/scout")
@@ -910,22 +935,7 @@ def scout(refresh: bool = False):
     if not opp:
         return {"opponent": None}
     mine, theirs, fa_entries, values, next_games = plan_inputs(league, me, opp, now, today, week, first, last, lineups)
-    acq = acquisitions_left(league, opp, first, last, week)
-    keepers = [p for p in opp.roster if not hasattr(p, "pending_until")]
-    ir_spots, ir_ids = ir_open(league, keepers)
-    # worst case: he streams as well as the planner can, dropping only bench players his best free agent beats per game
-    # (nobody releases a star who just happens to have no games this week)
-    best_fa = max((values.get(e["id"], 0) for e in fa_entries), default=0)
-    bench = sorted((p for p in keepers if p.lineupSlot == "BE" and p.injuryStatus != "OUT" and values.get(p.playerId, 0) < best_fa),
-                   key=lambda p: values.get(p.playerId, 0))
-    his_plan = streaming.plan(
-        days=days_between(max(today, first), last),
-        slots=sum(1 for p in opp.roster if p.lineupSlot not in ("BE", "IR")),
-        mine=theirs, opp_totals=streaming.totals(scores(my_cats), mine), current=scores(opp_cats),
-        free_agents=fa_entries, values=values, next_games=next_games,
-        droppable={p.playerId for p in bench[:SCOUT_DROPS]},
-        acquisitions=acq["left"] if acq["left"] is not None else (acq["limit"] or 0),
-        opp_rem=streaming.remaining(mine), lineup=lineup_slots(league), ir_spots=ir_spots, ir_ids=ir_ids)
+    acq, his_plan = worst_case(league, opp, mine, theirs, fa_entries, values, next_games, my_cats, opp_cats, today, first, last, week)
     flip = {"W": "L", "L": "W", "T": "T"}  # his plan is from his side; the page shows yours
     yours = lambda side: {"record": streaming.record({c: flip[r] for c, r in side["result"].items()}),
                           "expected": round(9 - side["expected"], 2), "result": {c: flip[r] for c, r in side["result"].items()}}
@@ -960,7 +970,7 @@ def scout(refresh: bool = False):
                        "per_game": e["per_game"], "value": round(values.get(p.playerId, 0), 1), "form": form,
                        "top": [c for c, _ in sorted(z(e["per_game"]).items(), key=lambda kv: -kv[1])[:2]]})
     report = {"opponent": opp.team_name, "week": {"number": week, "start": first.isoformat(), "end": last.isoformat()},
-              "acquisitions": acq, "ir": {"open": ir_spots},
+              "acquisitions": acq, "ir": {"open": ir_open(league, [p for p in opp.roster if not hasattr(p, "pending_until")])[0]},
               "now": {**yours(his_plan["before"]), "prob": prob_now},
               "worst": {**yours(his_plan["after"]), "prob": prob_worst, "moves": his_plan["moves"]},
               "mine": before_mine, "theirs": before_his, "theirs_worst": his_plan["after"]["mine"],

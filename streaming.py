@@ -18,6 +18,7 @@ STREAM_MIN = 0.10       # a stream must add at least this many expected categori
 STREAM_TOLERANCE = 4.0  # ...and may cost at most this much two-week value (about 1 per game over ~4 games)
 UPGRADE_MIN = 2.0       # an upgrade for next week must add at least this much two-week value
 LOCKED_COST = 0.02      # ...and may cost this week at most this many expected categories (locked ones only)
+PROTECT_WEIGHT = 0.5    # with the opponent's worst case: half "he stands pat", half "he streams as well as he can"
 SPREAD = {"PTS": 2, "REB": 1.5, "AST": 1.5, "STL": 1.2, "BLK": 1.5, "3PM": 1.3, "TO": 1.2}  # same as the dashboard
 
 
@@ -154,7 +155,7 @@ def record(res):
 
 
 def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None,
-         opp_rem=None, lineup=None, ir_spots=0, ir_ids=None):
+         opp_rem=None, lineup=None, ir_spots=0, ir_ids=None, opp_worst=None):
     """Greedy week plan.
 
     days: remaining dates in order. slots: starting spots per day.
@@ -167,6 +168,9 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     lineup: the league's starting slots (e.g. ["PG", "SG", ..., "UT"]); with players' "elig" slot lists, a pickup's
     game only counts on a day he fits into the lineup next to everyone already starting (positions checked).
     Without it, a game counts while fewer than `slots` players start that day.
+    opp_worst: {"totals", "rem"} of the opponent after his best streaming (Scouting's worst case). Then every chance is
+    the PROTECT_WEIGHT blend of "he stands pat" and "he streams hard", so moves that shore up the categories he could
+    take count more; moves report the categories they protect.
     ir_spots / ir_ids: open IR spots and OUT players not on IR yet. Moving one to IR frees a roster spot like a drop
     (he plays no games either way) but keeps him, so it costs no value; at most ir_spots such moves are made.
     Each step tries every add (today or on one of the free agent's game days) with every allowed drop. This week
@@ -184,7 +188,15 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     moves = []
     best = score(totals(current, roster), opp_totals)
     start = totals(current, roster)
-    chances = lambda r: odds(totals(current, r), opp_totals, remaining(r), opp_rem)
+    def chances(r):
+        base = odds(totals(current, r), opp_totals, remaining(r), opp_rem)
+        if not opp_worst:
+            return base
+        w = worst_odds(r)
+        return {c: (1 - PROTECT_WEIGHT) * base[c] + PROTECT_WEIGHT * w[c] for c in CATS}
+
+    worst_odds = lambda r: odds(totals(current, r), opp_worst["totals"], remaining(r), opp_worst["rem"])
+    plain = lambda r: odds(totals(current, r), opp_totals, remaining(r), opp_rem)  # what the pages show
     best_prob = chances(roster)
 
     def apply(add, drop, day):
@@ -251,9 +263,13 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         if not pick:
             break
         before = totals(current, roster)
+        before_roster = roster
         _, s, dw, dv, fa, drop, day, roster, used, games, add_games, drop_games, prob, de = pick
         prob_before = best_prob
         best_prob = prob
+        # categories this move rescues from his best streaming (10+ points of win chance in that scenario)
+        protects = [] if not opp_worst else [c for c, (a, b) in
+                                             ((c, (worst_odds(before_roster)[c], worst_odds(roster)[c])) for c in CATS) if b - a >= 0.10]
         after = totals(current, roster)
         res_before, res_after = result(before, opp_totals), result(after, opp_totals)
         best = s
@@ -271,11 +287,12 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                       # his games from the add day on that can't count: lineup full, or no open slot for his positions
                       "benched": sorted(d for d in fa["lines"] if d >= day and d not in games),
                       "kind": "stream" if pick[0][0] else "upgrade", "week": dw, "value": round(dv, 2), "ir": to_ir,
+                      "protects": protects,
                       # what each side brings to or takes from this week's matchup: games and summed stats
                       "add_stats": {k: sum(l.get(k, 0) for l in games.values()) for k in KEYS},
                       "drop_stats": {k: sum(l.get(k, 0) for l in lost.values()) for k in KEYS},
-                      "expected": [round(sum(prob_before.values()), 2), round(sum(prob.values()), 2)],
-                      "win": [round(win_chance(prob_before), 3), round(win_chance(prob), 3)],
+                      "expected": [round(sum(plain(before_roster).values()), 2), round(sum(plain(roster).values()), 2)],
+                      "win": [round(win_chance(plain(before_roster)), 3), round(win_chance(plain(roster)), 3)],
                       "next_games": next_games.get(fa["id"], 0),
                       # the numbers behind the move, for the "why" on each card
                       "add_games": add_games, "drop_games": drop_games,
@@ -291,8 +308,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
             "players": rows(roster, tags),
             # same odds as the dashboard: categories expected = each category's chance of being won, summed
             "before": {"mine": start, "result": result(start, opp_totals), "record": record(result(start, opp_totals)),
-                       "expected": round(sum(chances([dict(p, games=dict(p["games"])) for p in mine]).values()), 2),
-                       "prob": chances([dict(p, games=dict(p["games"])) for p in mine])},
+                       "expected": round(sum(plain(mine).values()), 2), "prob": plain(mine)},
             "after": {"mine": end, "result": result(end, opp_totals), "record": record(result(end, opp_totals)),
-                      "expected": round(sum(chances(roster).values()), 2), "prob": chances(roster)},
+                      "expected": round(sum(plain(roster).values()), 2), "prob": plain(roster)},
             "theirs": opp_totals}
