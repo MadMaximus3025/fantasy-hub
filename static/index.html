@@ -591,7 +591,7 @@ function recordCards() {
       : '<p class="muted">No graded pickups in ESPN\'s recent activity yet.</p>'}
     <p class="muted">Each add from ESPN's activity log: the added player's real games from the add day through that week's Sunday (or yesterday),
       against the dropped player's games over the same days, wherever he played. W = the add did better in that category (TO: fewer).
-      Covers the league's latest 100 moves.</p></section>
+      Reads back through ESPN's league activity feed (up to 10 pages).</p></section>
   <section class="card wide"><h2>Start/sit calls <small>this week and last</small></h2>
     <p><b>${lineups.length - diff.length} of ${lineups.length} days the site's lineup matched yours.</b>${diff.length ? ` On the ${diff.length} other day${diff.length === 1 ? "" : "s"}: the site's picks did better on ${lw}, yours on ${ll}${diff.length - lw - ll ? `, even on ${diff.length - lw - ll}` : ""}.` : ""}</p>
     ${diff.length ? `<div class="h2h-scroll"><table class="guide acc-games"><thead><tr><th scope="col">Day</th>${head}</tr></thead><tbody>${luRows}</tbody></table></div>` : ""}
