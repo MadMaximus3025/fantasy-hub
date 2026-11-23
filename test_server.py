@@ -621,6 +621,11 @@ pk, pk_skipped = server.pickup_record(rec_league, me, TODAY)
 assert pk_skipped == []
 assert len(pk) == 1 and pk[0]["add"] == "Adder" and pk[0]["games"] == [1, 1], pk  # other teams' moves left out; today's game not yet
 assert pk[0]["add_totals"]["PTS"] == 15 and pk[0]["through"] == "2026-11-17" and pk[0]["result"]["PTS"] == "W", pk  # through yesterday
+assert pk[0]["net"]["PTS"] == 7 and pk[0]["net"]["FG%"] == 0 and pk[0]["still_yours"] and pk[0]["value"] > 0, pk  # net per cat + overall
+later_drop = NS(date=datetime(2026, 11, 17, 9).timestamp() * 1000, actions=[(me, "DROPPED", "Adder", "")])
+rec_league2 = NS(recent_activity=lambda size, offset=0: [later_drop, act] if offset == 0 else [], player_map=rec_league.player_map)
+pk2, _ = server.pickup_record(rec_league2, me, TODAY)
+assert pk2[0]["through"] == "2026-11-16" and not pk2[0]["still_yours"] and pk2[0]["games"] == [1, 0], pk2  # his time on your team only
 
 # lineups: the site's start/sit rule replayed on a past day with projections from earlier games only
 YDAY = TODAY - timedelta(days=1)

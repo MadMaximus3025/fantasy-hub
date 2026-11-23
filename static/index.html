@@ -581,16 +581,27 @@ function recordCards() {
   const cats = r => CATS9.map(c => `<td class="${r[c] === "W" ? "pos" : r[c] === "L" ? "neg" : "muted"}">${r[c]}</td>`).join("");
   const head = `${CATS9.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">Won</th>`;
   const verdict = x => `<td><b class="${x.won > x.lost ? "pos" : x.won < x.lost ? "neg" : ""}">${x.won}-${x.lost}</b></td>`;
-  const pw = pickups.filter(x => x.won > x.lost).length, pl = pickups.filter(x => x.won < x.lost).length;
-  const pickRows = pickups.map(x => `<tr><th scope="row">${esc(x.add)}<small>for ${esc(x.drop || "an open spot")} · ${gameDay(x.date)}–${gameDay(x.through)} · ${x.games[0]} vs ${x.games[1]} games</small></th>${cats(x.result)}${verdict(x)}</tr>`).join("");
+  // net per category: added player minus dropped player over the same days; green helped you (TO: fewer helped)
+  const netCell = (c, v) => {
+    if (v == null) return `<td class="muted">—</td>`;
+    const pct = c.endsWith("%"), shown = pct ? +(v * 100).toFixed(1) : Math.round(v);
+    if (!shown) return `<td class="muted">0</td>`;
+    const good = c === "TO" ? v < 0 : v > 0;
+    return `<td class="${good ? "pos" : "neg"}">${v > 0 ? "+" : "−"}${Math.abs(shown)}${pct ? " pts" : ""}</td>`;
+  };
+  const netVal = x => x.value == null ? `<td>—</td>` : `<td><b class="${x.value > 0 ? "pos" : x.value < 0 ? "neg" : ""}">${x.value > 0 ? "+" : x.value < 0 ? "−" : ""}${Math.abs(x.value).toFixed(1)}</b>
+    <small>${x.value > 0 ? "helped" : x.value < 0 ? "hurt" : "even"}</small></td>`;
+  const pw = pickups.filter(x => x.value > 0).length, pl = pickups.filter(x => x.value < 0).length;
+  const pickRows = pickups.map(x => `<tr><th scope="row">${esc(x.add)}<small>for ${esc(x.drop || "an open spot")} · ${gameDay(x.date)}–${x.still_yours ? "now" : gameDay(x.through)} · ${x.games[0]} vs ${x.games[1]} games</small></th>${CATS9.map(c => netCell(c, (x.net || {})[c])).join("")}${netVal(x)}</tr>`).join("");
   const diff = lineups.filter(x => !x.same), lw = diff.filter(x => x.won > x.lost).length, ll = diff.filter(x => x.won < x.lost).length;
   const luRows = diff.map(x => `<tr><th scope="row">${gameDay(x.date)}<small>site: ${x.site_starts.map(esc).join(", ")} · you: ${x.you_started.map(esc).join(", ")}</small></th>${cats(x.result)}${verdict(x)}</tr>`).join("");
   return `<section class="card wide"><h2>Your pickups <small>graded on real games</small></h2>
-    ${pickups.length ? `<p><b>${pw} helped · ${pl} hurt · ${pickups.length - pw - pl} even</b> (by categories won: the player you added vs the one you dropped, same days)</p>
-      <div class="h2h-scroll"><table class="guide acc-games"><thead><tr><th scope="col">Added</th>${head}</tr></thead><tbody>${pickRows}</tbody></table></div>`
+    ${pickups.length ? `<p><b>${pw} helped · ${pl} hurt${pickups.length - pw - pl ? ` · ${pickups.length - pw - pl} even` : ""}</b> over each player's time on your team</p>
+      <div class="h2h-scroll"><table class="guide acc-games"><thead><tr><th scope="col">Added</th>${CATS9.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">Net</th></tr></thead><tbody>${pickRows}</tbody></table></div>`
       : '<p class="muted">No graded pickups in ESPN\'s recent activity yet.</p>'}
-    <p class="muted">Each add from ESPN's activity log: the added player's real games from the add day through that week's Sunday (or yesterday),
-      against the dropped player's games over the same days, wherever he played. W = the add did better in that category (TO: fewer).
+    <p class="muted">Each add from ESPN's activity log: the added player's real games from the add day until you dropped him (or now),
+      minus the dropped player's games over the same days, wherever he played. Green = the swap helped you in that category (TO: fewer);
+      FG%/FT% in percentage points. Net = all 9 categories combined, each difference scaled by how much that stat varies between players.
       Reads back through ESPN's league activity feed (up to 10 pages).</p></section>
   <section class="card wide"><h2>Start/sit calls <small>this week and last</small></h2>
     <p><b>${lineups.length - diff.length} of ${lineups.length} days the site's lineup matched yours.</b>${diff.length ? ` On the ${diff.length} other day${diff.length === 1 ? "" : "s"}: the site's picks did better on ${lw}, yours on ${ll}${diff.length - lw - ll ? `, even on ${diff.length - lw - ll}` : ""}.` : ""}</p>
