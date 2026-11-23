@@ -272,6 +272,8 @@
   .breakdown h3 { margin:var(--sp-3) 0 var(--sp-1); font-size:var(--fs-sm); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
   .breakdown th, .breakdown td { white-space:nowrap; }
   .breakdown tbody th { white-space:normal; min-width:12em; }
+  .net { margin:var(--sp-2) 0; font-size:var(--fs-sm); color:var(--text-2); }
+  .net .pos, .net .neg { font-weight:700; }
   .ahead { list-style:none; margin:var(--sp-2) 0; padding:0; font-size:var(--fs-sm); color:var(--text-2); }
   .ahead li { margin:2px 0; }  /* names carry news notes; let them wrap so the stat columns stay in view */
   .breakdown tr.sum td, .breakdown tr.sum th { font-weight:700; border-top:2px solid var(--line); }
@@ -740,10 +742,11 @@ function planCard(s) {
         ${m.games.length ? `counts ${m.games.length} game${m.games.length === 1 ? "" : "s"} this week (${m.games.map(gameDay).join(", ")})` : "no games left this week"} · ${m.next_games} next week</div>
       <div class="rd-wrap">${radar(left, right, m.add.name, m.drop.name)}
         <div class="rd-legend"><div class="rd-head"><span>Projected per game</span><span>9-cat value</span></div>
-          ${[[m.add, "a", "Add", m.add_stats, m.games.length, 1], [m.drop, "b", "Drop", m.drop_stats, m.drop_week, -1]].map(([x, k, verb, st, n, sign]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
+          ${[[m.add, "a", "Add", m.games.length, 1], [m.drop, "b", "Drop", m.drop_week, -1]].map(([x, k, verb, n, sign]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
             <img class="pic sm" src="${headshot(x.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-            <span><b>${verb} ${esc(x.name)}</b><small>${st ? matchupImpact(st, n, sign) : adjText(x)}</small></span>
+            <span><b>${verb} ${esc(x.name)}</b><small>${n != null ? gamesText(n, sign) : adjText(x)}</small></span>
             <b class="${x.value >= 0 ? "pos" : "neg"}">${x.value >= 0 ? "+" : ""}${(x.value ?? 0).toFixed(1)}</b></div>`).join("")}
+          ${m.change ? netLine(m) : ""}
           <p class="muted">Bigger on an axis = better there (TO: fewer). Values: <span class="rd-a">add</span> · drop.</p></div></div>
       ${formTable(m)}
       <div class="meta-line">${m.win ? `<b>Win this matchup: ${Math.round(m.win[0] * 100)}% → ${Math.round(m.win[1] * 100)}%</b> · expected categories ${m.expected[0].toFixed(1)} → ${m.expected[1].toFixed(1)} · `
@@ -932,12 +935,16 @@ const adjText = x => x.factor && Math.abs(x.factor - 1) >= 0.005
   ? `Projection: ${basisText(x)} ×${x.factor.toFixed(2)}${x.note ? ` · ${esc(x.note)}` : ""}` : `Projection: ${basisText(x)}`;
 
 // What one side of a move brings to (+) or takes from (−) this week's matchup: games and projected stats
-function matchupImpact(st, games, sign) {
-  const pm = sign > 0 ? "+" : "−";
-  if (!games) return sign > 0 ? "No games left this week" : "No games left this week: costs you nothing now";
-  const parts = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"].filter(c => Math.round(st[c])).map(c => `${pm}${Math.round(st[c])} ${c}`);
-  const shot = (m, a, label) => a >= 0.5 ? [`${label} ${Math.round(m)}/${Math.round(a)}`] : [];
-  return `This week: ${pm}${games} game${games === 1 ? "" : "s"} · ${[...parts, ...shot(st.FGM, st.FGA, "FG"), ...shot(st.FTM, st.FTA, "FT")].join(" · ")}`;
+const gamesText = (games, sign) => games
+  ? `${sign > 0 ? "+" : "−"}${games} game${games === 1 ? "" : "s"} this week` : "No games left this week";
+
+// The move's net effect on your projected totals this week (after − before): green helps, red hurts (TO: fewer helps)
+function netLine(m) {
+  const c = m.change || {};
+  const part = (k, v, text) => `<span class="${(k === "TO" ? v < 0 : v > 0) ? "pos" : "neg"}">${v > 0 ? "+" : "−"}${text} ${k}</span>`;
+  const parts = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"].filter(k => Math.round(c[k] || 0)).map(k => part(k, c[k], Math.abs(Math.round(c[k]))))
+    .concat(["FG%", "FT%"].filter(k => Math.abs((c[k] || 0) * 100) >= 0.05).map(k => part(k, c[k], `${Math.abs(c[k] * 100).toFixed(1)} pts`)));
+  return `<p class="net"><b>Net this week:</b> ${parts.length ? parts.join(" · ") : "no change to your totals"}</p>`;
 }
 
 // The add's and drop's last 3 games, then their games ahead (this week and next) with opponents
