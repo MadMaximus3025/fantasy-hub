@@ -617,7 +617,8 @@ g = lambda d, pts, mins="30": {"date": d, "opp": "BOS", "at": "@", "result": "",
      "3PM": "1", "PTS": str(pts), "REB": "4", "AST": "3", "STL": "1", "BLK": "0", "TO": "2"}}
 server.fetch_gamelog = lambda pid, season: {801: [g("2026-11-18", 20), g("2026-11-16", 15), g("2026-11-14", 99)],  # 11/14: before the add
                                             802: [g("2026-11-17", 8), g("2026-11-19", 0, "0")]}[pid]  # 11/19: DNP
-pk = server.pickup_record(rec_league, me, TODAY)
+pk, pk_skipped = server.pickup_record(rec_league, me, TODAY)
+assert pk_skipped == []
 assert len(pk) == 1 and pk[0]["add"] == "Adder" and pk[0]["games"] == [1, 1], pk  # other teams' moves left out; today's game not yet
 assert pk[0]["add_totals"]["PTS"] == 15 and pk[0]["through"] == "2026-11-17" and pk[0]["result"]["PTS"] == "W", pk  # through yesterday
 
