@@ -895,7 +895,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
 
 
 _scout = {}  # week -> (time, report); a report downloads every free agent's game log, so keep it 5 minutes
-SCOUT_DROPS = 3  # the worst case lets the opponent drop his this many lowest-value bench players
+SCOUT_DROPS = 3  # the worst case lets the opponent drop up to this many bench players a free agent beats
 
 
 @app.get("/api/scout")
@@ -913,8 +913,11 @@ def scout(refresh: bool = False):
     acq = acquisitions_left(league, opp, first, last, week)
     keepers = [p for p in opp.roster if not hasattr(p, "pending_until")]
     ir_spots, ir_ids = ir_open(league, keepers)
-    # worst case: he streams as well as the planner can, dropping his weakest healthy bench players
-    bench = sorted((p for p in keepers if p.lineupSlot == "BE" and p.injuryStatus != "OUT"), key=lambda p: values.get(p.playerId, 0))
+    # worst case: he streams as well as the planner can, dropping only bench players his best free agent beats per game
+    # (nobody releases a star who just happens to have no games this week)
+    best_fa = max((values.get(e["id"], 0) for e in fa_entries), default=0)
+    bench = sorted((p for p in keepers if p.lineupSlot == "BE" and p.injuryStatus != "OUT" and values.get(p.playerId, 0) < best_fa),
+                   key=lambda p: values.get(p.playerId, 0))
     his_plan = streaming.plan(
         days=days_between(max(today, first), last),
         slots=sum(1 for p in opp.roster if p.lineupSlot not in ("BE", "IR")),

@@ -990,7 +990,7 @@ function scoutView(d) {
   <section class="card wide"><h2>What he'd need</h2>
     <div class="h2h-scroll"><table class="lu-totals"><thead><tr><th scope="col">Cat</th><th scope="col">You</th><th scope="col">${esc(sc.opponent)}${sc.worst.moves?.length ? " (→ if he streams)" : ""}</th>
       <th scope="col">He needs</th><th scope="col">Win % now</th><th scope="col">If he streams</th></tr></thead><tbody>${catRows}</tbody></table></div>
-    ${moves ? `<p><b>His best moves</b> (with his ${a.left ?? "?"} adds, dropping his weakest bench players or using IR):</p><ol class="moves">${moves}</ol>` : '<p class="muted">No free-agent move helps him this week.</p>'}
+    ${moves ? `<p><b>His best moves</b> (with his ${a.left ?? "?"} adds, dropping only bench players a free agent beats, or using IR):</p><ol class="moves">${moves}</ol>` : '<p class="muted">No free-agent move helps him this week.</p>'}
     <p class="muted">Projected week-end totals. "If he streams" = the Streaming planner run for him: his best available free agents on his open lineup days, up to his adds left.
       A ceiling: most opponents don't stream this well. Streamer games = his gap ÷ the top 5 free agents' per-game average in that category.</p></section>
   <section class="card"><h2>Games per day</h2>
