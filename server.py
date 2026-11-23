@@ -249,6 +249,7 @@ def planner_rows(roster, team_id, start, end, today, lineups):
 
     return [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
              "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None, "pending": getattr(p, "pending", None),
+             "elig": [x for x in getattr(p, "eligibleSlots", []) if x not in ("BE", "IR")],  # lineup slots he can fill
              "avg": {k: proj_avg(p).get(k, 0) for k in keep},  # projection (what every page uses)
              "season": {k: season_avg(p).get(k, 0) for k in keep}, "factor": getattr(p, "proj_factor", 1), "why": getattr(p, "proj_why", ""),
              "days": [day_state(p, team_id, d, today, lineups) for d in days],
@@ -269,6 +270,7 @@ def add_impact(rows):
         r["impact"] = [round(sum(cats.values()), 1) if cats else None for cats in r["impact_cats"]]
         r["impact_week"] = round(sum(v for v in r["impact"] if v is not None), 1)
         r["top"] = [c for c, _ in sorted(z(r["avg"]).items(), key=lambda kv: -kv[1])[:2]]
+        r["value"] = round(sum(z(r["avg"]).values()), 2)  # projected per-game impact, started or not (lineup page)
 
 
 def team_games(league, start, end):
@@ -634,7 +636,8 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
             "availability": {"mine": availability(me.roster, now, first, last, me.team_id, lineups),
                              "theirs": availability(opp.roster, now, first, last, opp.team_id, lineups)},
         }
-    add_impact(data["planner"]["mine"] + data["planner"].get("theirs", []))  # scored against both rosters together
+    add_impact(data["planner"]["mine"] + data["planner"].get("theirs", []))
+    data["lineup"] = lineup_slots(league) if actuals else None  # starting slots, for the daily lineup page  # scored against both rosters together
     return data
 
 

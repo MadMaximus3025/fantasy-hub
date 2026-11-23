@@ -274,6 +274,9 @@
   .breakdown tbody th { white-space:normal; min-width:12em; }
   .net { margin:var(--sp-2) 0; font-size:var(--fs-sm); color:var(--text-2); }
   .net .pos, .net .neg { font-weight:700; }
+  .lineup tr.lu-change > * { background:rgb(255 204 0 / .12); }
+  .lineup tbody th { white-space:nowrap; color:var(--text); font-weight:800; }
+  .lineup tbody th small { display:block; margin-left:42px; }
   .ahead { list-style:none; margin:var(--sp-2) 0; padding:0; font-size:var(--fs-sm); color:var(--text-2); }
   .ahead li { margin:2px 0; }  /* names carry news notes; let them wrap so the stat columns stay in view */
   .breakdown tr.sum td, .breakdown tr.sum th { font-weight:700; border-top:2px solid var(--line); }
@@ -318,7 +321,7 @@
   .error { color:var(--loss); padding:var(--sp-4); }
   /* phones: the page links fold into a ☰ menu that opens as a stacked list under the header */
   .menu-toggle { display:none; }
-  @media (max-width: 860px) {
+  @media (max-width: 900px) {
     header { position:relative; flex-wrap:nowrap; align-items:flex-start; }
     .menu-toggle { display:inline-flex; justify-content:center; width:44px; height:44px; padding:0; background:transparent; color:var(--text); border:2px solid var(--text); }
     .menu-toggle svg { width:20px; height:20px; }
@@ -347,7 +350,7 @@
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
     <button class="menu-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="pages"><svg class="i-open" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><svg class="i-close" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
+    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -912,6 +915,73 @@ function rosterGuideCard(d) {
 
 const CATS9 = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%"];
 
+// ---- Daily lineup page (#lineup): one day's players with a game, who ESPN starts, and who to start ----
+const lineup = { day: null };  // ISO date picked; null = today (or the next day with games)
+
+// Can all these players (each a list of eligible slot names) start at once in these slots? (augmenting paths)
+function fitsLineup(players, slots) {
+  const owner = new Map();
+  const place = (i, seen) => slots.some((slot, j) => {
+    if (!players[i].includes(slot) || seen.has(j)) return false;
+    seen.add(j);
+    if (!owner.has(j) || place(owner.get(j), seen)) { owner.set(j, i); return true; }
+    return false;
+  });
+  return players.length <= slots.length && players.every((_, i) => place(i, new Set()));
+}
+
+function lineupView(d) {
+  const days = weekDays(d), iso = x => x.toLocaleDateString("en-CA");
+  const rows = d.planner.mine, today = d.week.today;
+  const playing = i => rows.filter(r => r.opps[i] && r.days[i] !== "off");
+  let i = days.findIndex(x => iso(x) === lineup.day);
+  if (i < 0) i = Math.max(0, days.findIndex((x, k) => iso(x) >= today && playing(k).length));
+  const slots = d.lineup || null;
+  const spots = slots ? slots.length : rows.filter(r => !["BE", "IR"].includes(r.slot)).length;
+  const avail = playing(i).filter(r => r.days[i] !== "out");
+  // best lineup by projected per-game value that fits the slots (greedy is optimal for slot matching)
+  const pick = [];
+  for (const r of [...avail].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))) {
+    if (pick.length >= spots) break;
+    if (!slots || fitsLineup([...pick, r].map(x => x.elig || []), slots)) pick.push(r);
+  }
+  const chosen = new Set(pick.map(r => r.id));
+  const espnStart = r => r.days[i] === "start" || r.days[i] === "dnp";
+  const ins = avail.filter(r => chosen.has(r.id) && !espnStart(r)), outs = avail.filter(r => !chosen.has(r.id) && espnStart(r));
+  const order = r => (r.days[i] === "out" ? 2 : chosen.has(r.id) ? 0 : 1);
+  const list = playing(i).sort((a, b) => order(a) - order(b) || (b.value ?? 0) - (a.value ?? 0));
+  const cols = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"];
+  const espn = r => ({ start: "Starting", bench: "Bench", out: "OUT", dnp: "Started · DNP" })[r.days[i]] || r.days[i];
+  const body = list.map(r => {
+    const sug = r.days[i] === "out" ? "—" : chosen.has(r.id) ? "Start" : "Sit";
+    const change = (chosen.has(r.id) && !espnStart(r)) || (!chosen.has(r.id) && espnStart(r) && r.days[i] !== "out");
+    return `<tr class="${change ? "lu-change" : ""}"><td><b class="${sug === "Start" ? "pos" : sug === "Sit" ? "neg" : ""}">${sug}</b></td>
+      <td class="${r.days[i] === "out" ? "st-out" : ""}">${espn(r)}</td>
+      <th scope="row"><img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"> ${esc(r.name)}${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}
+        <small>${esc(r.team)} · ${esc((r.elig || []).filter(x => !x.includes("/") && !["UT", "G", "F"].includes(x)).join(", ") || r.slot)}</small></th>
+      <td>${esc(r.opps[i])}</td>${cols.map(c => `<td>${perGame(c, r.avg[c] || 0)}</td>`).join("")}
+      <td>${perGame("FG%", lineVal(r.avg, "FG%"))}</td><td>${perGame("FT%", lineVal(r.avg, "FT%"))}</td>
+      <td class="${(r.value ?? 0) >= 0 ? "pos" : "neg"}">${(r.value ?? 0) >= 0 ? "+" : ""}${(r.value ?? 0).toFixed(1)}</td></tr>`;
+  }).join("");
+  const chips = days.map((x, k) => `<button class="chip day" data-lday="${iso(x)}" aria-pressed="${k === i}">${x.toLocaleDateString(undefined, { weekday: "short" })} ${playing(k).filter(r => r.days[k] !== "out").length}</button>`).join("");
+  const swaps = ins.length || outs.length
+    ? `<p><b>Suggested changes:</b> start ${ins.map(r => esc(r.name)).join(", ") || "—"}; sit ${outs.map(r => esc(r.name)).join(", ") || "—"}.</p>`
+    : `<p class="muted">Your ESPN lineup already matches the suggestion for this day.</p>`;
+  const sw = d.projection ? matchupSummary(d).o.swing : [];
+  return `<section class="card wide"><div class="slate-head"><h2>Daily lineup · ${gameDay(iso(days[i]))}</h2>
+      <span class="muted">${avail.length} available for ${spots} spots${slots ? ` (${esc(slots.join(", "))})` : ""}</span></div>
+    <div class="day-chips" role="group" aria-label="Day (number of your players with a game)">${chips}</div>
+    ${avail.length > spots ? `<p><b>${avail.length - spots} more available than spots:</b> someone has to sit.</p>` : ""}
+    ${swaps}
+    ${sw.length ? `<p class="muted">Close categories this week: <b>${sw.join(", ")}</b>. When two players are near in value, start the one stronger there.</p>` : ""}
+    <div class="h2h-scroll"><table class="guide lineup"><thead><tr><th scope="col">Suggest</th><th scope="col">ESPN</th><th scope="col">Player</th><th scope="col">Opp</th>
+      ${cols.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">FG%</th><th scope="col">FT%</th><th scope="col">Value</th></tr></thead>
+      <tbody>${body || `<tr><td colspan="14" class="muted">Nobody on your roster plays this day.</td></tr>`}</tbody></table></div>
+    <p class="muted">Projected stats per game (the site's projection: recent games, plus fresh role news). Suggest = the lineup with the highest
+      total value (9-category impact per game; 0 = average player on the two rosters) that fits your league's slots${slots ? "" : " (slot settings unavailable: counts spots only)"}.
+      ESPN = your lineup as set on ESPN for that day. Highlighted rows differ from ESPN.</p></section>`;
+}
+
 function plannerView(d) {
   return `<div class="stack">${matchupGamesCard(d)}${teamGamesCard(d)}</div>${rosterGuideCard(d)}`;
 }
@@ -997,13 +1067,17 @@ let lastData = null;
 
 function render(d) {
   lastData = d;
-  const page = ["#planner", "#streaming", "#accuracy"].includes(location.hash) ? location.hash : "#";
+  const page = ["#planner", "#lineup", "#streaming", "#accuracy"].includes(location.hash) ? location.hash : "#";
   $("#app").classList.toggle("planner", page !== "#");
   document.querySelectorAll(".nav-row a").forEach(a => a.getAttribute("href") === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
-  $("#app").innerHTML = page === "#planner" ? plannerView(d) : page === "#streaming" ? streamView() : page === "#accuracy" ? accuracyView()
+  $("#app").innerHTML = page === "#planner" ? plannerView(d) : page === "#lineup" ? lineupView(d) : page === "#streaming" ? streamView() : page === "#accuracy" ? accuracyView()
     : matchupCard(d) + rosterCard(d);
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
+$("#app").addEventListener("click", e => {  // daily lineup: pick a day
+  const day = e.target.closest("[data-lday]");
+  if (day) { lineup.day = day.dataset.lday; render(lastData); }
+});
 // Phone menu: the ☰ button opens the page list; any choice in it, Escape, or a tap outside closes it
 const menu = $(".menu-toggle"), setMenu = open => { document.querySelector("header").classList.toggle("menu-open", open); menu.setAttribute("aria-expanded", open); };
 menu.onclick = () => setMenu(menu.getAttribute("aria-expanded") !== "true");
