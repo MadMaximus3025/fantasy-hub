@@ -979,6 +979,159 @@ def scout(refresh: bool = False):
     return report
 
 
+
+# ---- Track record: how the site's advice and your moves turned out, rebuilt from ESPN (nothing is stored) ----
+_record = {}  # "report" -> (time, report); rebuilding downloads game logs and two weeks of lineups
+
+
+def cat_verdict(a, b):
+    """Per-category result of stat totals a vs b (TO: fewer wins; FG%/FT% from makes/attempts): {cat: "W"/"L"/"T"}."""
+    def val(t, c):
+        if c == "FG%":
+            return t["FGM"] / t["FGA"] if t["FGA"] else None
+        if c == "FT%":
+            return t["FTM"] / t["FTA"] if t["FTA"] else None
+        return -t["TO"] if c == "TO" else t[c]
+    out = {}
+    for c in streaming.CATS:
+        x, y = val(a, c), val(b, c)
+        out[c] = "T" if x is None and y is None else "W" if y is None else "L" if x is None else "W" if x > y + 1e-9 else "L" if y > x + 1e-9 else "T"
+    return out
+
+
+def total(lines):
+    return {k: sum(l.get(k, 0) or 0 for l in lines) for k in streaming.KEYS}
+
+
+def pickup_record(league, me, today):
+    """Your adds from ESPN's activity log, each graded on real games: the added player's games from the add day to the end
+    of that Monday-Sunday week vs the dropped player's games over the same days (whoever he played for)."""
+    # shortcut: the league's 100 latest moves; a busy league pushes older ones out. Store moves if a full season is needed.
+    moves = []
+    for a in league.recent_activity(size=100):
+        acts = [(action, player) for team, action, player, *_ in a.actions if getattr(team, "team_id", None) == me.team_id]
+        adds = [pl for action, pl in acts if action in ("FA ADDED", "WAIVER ADDED")]
+        drops = [pl for action, pl in acts if action == "DROPPED"]
+        if adds:
+            moves.append((datetime.fromtimestamp(a.date / 1000).date(), adds[0], drops[0] if drops else None))
+    ids = lambda name: league.player_map.get(name) if isinstance(league.player_map.get(name), int) else None
+    out = []
+    for day, add, drop in moves:
+        end = min(week_bounds(day)[1], today - timedelta(days=1))
+        if end < day:
+            continue  # nothing finished yet
+        def games(name):
+            pid = ids(name)
+            if not pid:
+                return None
+            try:
+                return [stat_line(g) for g in fetch_gamelog(pid, current_season()) if day.isoformat() <= g["date"] <= end.isoformat()
+                        and (g["stats"].get("MIN") or "0") not in ("0", "", "-")]
+            except Exception:
+                return None
+        ga, gd = games(add), games(drop) if drop else []
+        if ga is None or gd is None:
+            continue
+        ta, td = total(ga), total(gd)
+        res = cat_verdict(ta, td)
+        out.append({"date": day.isoformat(), "through": end.isoformat(), "add": add, "drop": drop, "games": [len(ga), len(gd)],
+                    "add_totals": ta, "drop_totals": td, "result": res,
+                    "won": sum(r == "W" for r in res.values()), "lost": sum(r == "L" for r in res.values())})
+    return out
+
+
+def lineup_record(league, me, today):
+    """Past days of this and last matchup week: the site's start/sit rule replayed with what it knew that morning
+    (projections from games before that day), against the lineup you played. Where they differ, what each set of
+    players actually did that day."""
+    from types import SimpleNamespace
+    slots = lineup_slots(league)
+    week = league.currentMatchupPeriod
+    days_out = []
+    for w in (week - 1, week):
+        if w < 1:
+            continue
+        first, last = week_dates(league, w, today)
+        _, rosters = day_lineups(league, first, min(last, today - timedelta(days=1)), today, {me.team_id}, w)
+        for d in sorted(rosters):
+            if d >= today or any(d == x for x, _ in days_out):  # past days only, each once
+                continue
+            entries = (rosters[d] or {}).get(me.team_id) or {}
+            if not entries:
+                continue
+            period = scoring_period(league, d, today)
+            players = []
+            for pid, e in entries.items():
+                info = e.get("playerPoolEntry", {}).get("player", {})
+                slot = POSITION_MAP.get(e.get("lineupSlotId"))
+                elig = [POSITION_MAP.get(x) for x in info.get("eligibleSlots", []) if POSITION_MAP.get(x) not in (None, "", "BE", "IR")]
+                players.append({"id": pid, "name": info.get("fullName", str(pid)), "slot": slot, "elig": elig,
+                                "stats": played(e, period), "injured": info.get("injuryStatus") == "OUT"})
+            days_out.append((d, players))
+    if not days_out:
+        return []
+    logs = game_logs([SimpleNamespace(playerId=pid) for pid in {p["id"] for _, ps in days_out for p in ps}])
+    out = []
+    for d, players in days_out:
+        # only players who played that day can be compared on results (ESPN keeps bench players' stats too)
+        candidates = [p for p in players if p["slot"] != "IR" and p["stats"]]
+        proj = {}
+        for p in candidates:
+            before = [g for g in logs.get(p["id"], []) if g["date"] < d.isoformat()]
+            proj[p["id"]] = backtest.site(before) if before else None
+        pool = {i: v for i, v in proj.items() if v}
+        if len(pool) < 2:
+            continue
+        z = streaming.zscorer(pool)
+        value = {i: sum(z(v).values()) if v else -99 for i, v in proj.items()}
+        spots = len(slots) if slots else sum(1 for p in players if p["slot"] not in ("BE", "IR"))
+        pick = []
+        for p in sorted(candidates, key=lambda p: -value[p["id"]]):
+            if len(pick) >= spots:
+                break
+            if not slots or streaming.fits([q["elig"] for q in pick + [p]], slots):
+                pick.append(p)
+        site = {p["id"] for p in pick}
+        yours = {p["id"] for p in candidates if p["slot"] not in ("BE", "IR")}
+        if site == yours:
+            out.append({"date": d.isoformat(), "same": True})
+            continue
+        by_id = {p["id"]: p for p in candidates}
+        ins = [by_id[i] for i in site - yours]
+        outs = [by_id[i] for i in yours - site]
+        ti, to = total([p["stats"] for p in ins]), total([p["stats"] for p in outs])
+        res = cat_verdict(ti, to)
+        out.append({"date": d.isoformat(), "same": False, "site_starts": [p["name"] for p in ins], "you_started": [p["name"] for p in outs],
+                    "site_totals": ti, "your_totals": to, "result": res,
+                    "won": sum(r == "W" for r in res.values()), "lost": sum(r == "L" for r in res.values())})
+    return out
+
+
+@app.get("/api/record")
+def record(refresh: bool = False):
+    """Track record rebuilt from ESPN: your pickups graded on real games, and the site's start/sit rule replayed on past
+    days against the lineup you played."""
+    hit = _record.get("report")
+    if hit and time.time() - hit[0] < (60 if refresh else 1800):
+        return hit[1]
+    league, me = connect()
+    today = datetime.now().date()
+    errors = []
+    try:
+        pickups = pickup_record(league, me, today)
+    except Exception as e:
+        logging.exception("Couldn't rebuild the pickup record")
+        pickups, _ = [], errors.append(f"pickups: {e}")
+    try:
+        lineups = lineup_record(league, me, today)
+    except Exception as e:
+        logging.exception("Couldn't rebuild the lineup record")
+        lineups, _ = [], errors.append(f"lineups: {e}")
+    report = {"pickups": pickups, "lineups": lineups, "errors": errors, "updated": datetime.now(timezone.utc).isoformat()}
+    _record["report"] = (time.time(), report)
+    return report
+
+
 @app.get("/api/dashboard")
 def dashboard(refresh: bool = False, week: Annotated[int | None, Query(ge=1, le=30)] = None):
     """Saved data right away when there is any; otherwise a quick first version (no news or actual game stats).
