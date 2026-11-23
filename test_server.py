@@ -575,4 +575,10 @@ assert server.scoring_period(NS(pro_schedule={}, scoringPeriodId=40), TUE, TUE) 
 two = server.with_live(board, {MON: {1: {10: ln(PTS=20)}}, TUE: {1: {10: ln(PTS=5)}}}, [MON, TUE], 1)
 assert two["PTS"]["score"] == 405, two  # both days' stats on top of ESPN's totals
 
+# daily lineup page: every planner row has its per-game value and eligible slots; the dashboard carries the slots
+assert all("value" in r and "elig" in r for r in d["planner"]["mine"]) and "lineup" in d, d["planner"]["mine"][0].keys()
+slots_league = NS(espn_request=NS(league_get=lambda params: {"settings": {"rosterSettings": {"lineupSlotCounts":
+                  {"0": 1, "1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "10": 1, "11": 3, "12": 3, "13": 1}}}}))
+assert server.lineup_slots(slots_league) == ["PG", "SG", "SF", "PF", "C", "G", "F/C", "UT", "UT", "UT"]  # BE and IR left out
+
 print("ok")
