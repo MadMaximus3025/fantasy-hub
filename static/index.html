@@ -970,7 +970,7 @@ function lineupView(d) {
   const valid = !slots || fitsLineup(playingNow.map(r => r.elig || []), slots);
   const changed = onTeam.some(r => starts(r) !== espnOn(r));
   const cols = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"];
-  const order = [...(slots || []), "BE", "IR"];
+  const order = ["PG", "SG", "SF", "PF", "C", "G", "F", "SG/SF", "G/F", "PF/C", "F/C", "UT", "BE", "IR"];  // ESPN's slot order
   const rank = r => { const k = order.indexOf(slotOf(r)); return k < 0 ? order.length - 2 : k; };
   const slotName = x => ({ UT: "UTIL", BE: "Bench" })[x] || x;
   const body = [...onTeam].sort((a, b) => rank(a) - rank(b) || (b.value ?? 0) - (a.value ?? 0)).map(r => {

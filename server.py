@@ -648,7 +648,7 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
                              "theirs": availability(opp.roster, now, first, last, opp.team_id, lineups)},
         }
     add_impact(data["planner"]["mine"] + data["planner"].get("theirs", []))
-    data["lineup"] = lineup_slots(league) if actuals else None  # starting slots, for the daily lineup page  # scored against both rosters together
+    data["lineup"] = lineup_slots(league)  # starting slots, for the lineup page (read once per league object)  # scored against both rosters together
     return data
 
 
