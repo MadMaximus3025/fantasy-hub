@@ -4,16 +4,21 @@ Pure functions only; server.py gathers the ESPN data. A "line" is one player's e
 with the keys of season averages (PTS, REB, ..., FGM, FGA, FTM, FTA).
 """
 
+from statistics import NormalDist
+
 COUNTING = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO"]
 KEYS = COUNTING + ["FGM", "FGA", "FTM", "FTA"]
 CATS = ["FG%", "FT%", "3PM", "PTS", "REB", "AST", "STL", "BLK", "TO"]
 
 
-# shortcut: hand-picked weights for trading this week's categories against season-long value; tune if moves feel off
-# values below are per-game value x games over the rest of this week and next week's matchup
-VALUE_WEIGHT = 0.15     # one category won this week counts like ~7 points of two-week value
-STREAM_TOLERANCE = 4.0  # a stream may cost up to this much two-week value (about 1 per game over ~4 games)
-UPGRADE_MIN = 2.0       # a move that wins nothing this week must add at least this much two-week value
+# Win this week first: a move is judged by how many categories you expect to win this week (sum of each category's
+# win chance, the dashboard's odds model). Next week only counts once this week can't be helped.
+# shortcut: hand-picked thresholds; tune if moves feel off. Values = per-game value x games this week + next.
+STREAM_MIN = 0.10       # a stream must add at least this many expected categories this week
+STREAM_TOLERANCE = 4.0  # ...and may cost at most this much two-week value (about 1 per game over ~4 games)
+UPGRADE_MIN = 2.0       # an upgrade for next week must add at least this much two-week value
+LOCKED_COST = 0.02      # ...and may cost this week at most this many expected categories (locked ones only)
+SPREAD = {"PTS": 2, "REB": 1.5, "AST": 1.5, "STL": 1.2, "BLK": 1.5, "3PM": 1.3, "TO": 1.2}  # same as the dashboard
 
 
 def zscorer(lines):
@@ -61,6 +66,37 @@ def totals(current, players):
     return out
 
 
+def remaining(players):
+    """Summed lines of every counted game still to come (what can still move the totals)."""
+    return {k: sum(l.get(k, 0) for p in players for l in p["games"].values()) for k in KEYS}
+
+
+def odds(mine, theirs, rem_mine, rem_theirs=None):
+    """Chance of winning each category this week: projected margin against how much it usually swings over the
+    games left (the dashboard's model). FG%/FT% swing with attempts left."""
+    rem_theirs = rem_theirs or {}
+    prob = {}
+    for c in CATS:
+        diff = mine[c] - theirs[c]
+        if c == "TO":
+            diff = -diff
+        if c.endswith("%"):
+            k = "FGA" if c == "FG%" else "FTA"
+            v = sum(p * (1 - p) / n for p, n in ((mine[c], rem_mine.get(k, 0)), (theirs[c], rem_theirs.get(k, 0))) if n)
+        else:
+            v = SPREAD[c] * (rem_mine.get(c, 0) + rem_theirs.get(c, 0))
+        prob[c] = NormalDist().cdf(diff / v ** 0.5) if v > 0 else 1.0 if diff > 1e-9 else 0.0 if diff < -1e-9 else 0.5
+    return prob
+
+
+def win_chance(prob):
+    """Chance of winning the matchup (5+ of 9 categories), treating categories as independent."""
+    dist = [1.0]
+    for c in CATS:
+        dist = [x * (1 - prob[c]) + (dist[k - 1] * prob[c] if k else 0) for k, x in enumerate(dist + [0.0])]
+    return sum(dist[5:])
+
+
 def result(mine, theirs):
     """W/L/T per category (TO: fewer wins)."""
     res = {}
@@ -100,7 +136,8 @@ def record(res):
     return f'{sum(r == "W" for r in res.values())}-{sum(r == "L" for r in res.values())}-{sum(r == "T" for r in res.values())}'
 
 
-def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None):
+def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None,
+         opp_rem=None):
     """Greedy week plan.
 
     days: remaining dates in order. slots: starting spots per day.
@@ -109,10 +146,11 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     droppable: ids you are willing to drop. acquisitions: the most adds you may still make this week.
     values: {id: per-game season value} from player_values(). next_games: {id: games in next week's matchup}.
     A move's value gain = pickup's value x his games (counted this week + next week) - the same for the dropped player.
-    Each step tries every add (today or on one of the free agent's game days) with every allowed drop, and makes
-    the best move of two kinds: a stream (wins more categories this week without costing much two-week value)
-    or an upgrade (adds clear value this week and/or next week, without losing a category this week). Moves rank by
-    categories gained + VALUE_WEIGHT x value gained. Stops when no move qualifies or adds run out.
+    opp_rem: the opponent's summed remaining lines (remaining()), for how much his totals can still swing.
+    Each step tries every add (today or on one of the free agent's game days) with every allowed drop. This week
+    comes first: a stream raises the categories you expect to win this week (by STREAM_MIN+) without costing much
+    two-week value, and the best stream wins. Only when no stream helps, an upgrade may be made: clear value this
+    week + next that costs this week nothing but locked categories. Stops when no move qualifies or adds run out.
     """
     values, next_games = values or {}, next_games or {}
     roster = [dict(p, games=dict(p["games"])) for p in mine]
@@ -122,6 +160,8 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     moves = []
     best = score(totals(current, roster), opp_totals)
     start = totals(current, roster)
+    chances = lambda r: odds(totals(current, r), opp_totals, remaining(r), opp_rem)
+    best_prob = chances(roster)
 
     def apply(add, drop, day):
         """New roster and slot use after dropping `drop` and adding `add` on `day` (both from that day on)."""
@@ -160,24 +200,29 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                         continue
                     new_roster, new_used, games = apply(fa, drop, day)
                     s = score(totals(current, new_roster), opp_totals)
-                    dw = s[0] - best[0]  # categories gained this week (ties count half)
+                    dw = s[0] - best[0]  # categories flipped this week (ties count half), for display
+                    prob = chances(new_roster)
+                    de = sum(prob.values()) - sum(best_prob.values())  # expected categories gained this week
                     # value gained over the rest of this week and next week: per-game value x games each player plays
                     add_games = len(games) + next_games.get(fa["id"], 0)
                     drop_games = sum(d >= day for d in drop["games"]) + next_games.get(drop["id"], 0)
                     if not add_games:
                         continue  # can't help this week or next
                     dv = values.get(fa["id"], 0) * add_games - values.get(drop["id"], 0) * drop_games
-                    is_stream = dw > 0 and games and dv > -STREAM_TOLERANCE
-                    is_upgrade = dw >= 0 and dv >= UPGRADE_MIN
+                    is_stream = de >= STREAM_MIN and games and dv > -STREAM_TOLERANCE
+                    is_upgrade = de >= -LOCKED_COST and dv >= UPGRADE_MIN
                     if not (is_stream or is_upgrade):
                         continue
-                    key = (dw + VALUE_WEIGHT * dv, s[1])
+                    # any stream beats any upgrade; streams by this week's gain, upgrades by two-week value
+                    key = (1, de, dv) if is_stream else (0, dv, de)
                     if pick is None or key > pick[0]:
-                        pick = (key, s, dw, dv, fa, drop, day, new_roster, new_used, games, add_games, drop_games)
+                        pick = (key, s, dw, dv, fa, drop, day, new_roster, new_used, games, add_games, drop_games, prob, de)
         if not pick:
             break
         before = totals(current, roster)
-        _, s, dw, dv, fa, drop, day, roster, used, games, add_games, drop_games = pick
+        _, s, dw, dv, fa, drop, day, roster, used, games, add_games, drop_games, prob, de = pick
+        prob_before = best_prob
+        best_prob = prob
         after = totals(current, roster)
         res_before, res_after = result(before, opp_totals), result(after, opp_totals)
         best = s
@@ -187,9 +232,15 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         side = lambda p: {"id": p["id"], "name": p["name"], "line": p.get("per_game") or p.get("season"),
                           "factor": p.get("factor") or 1, "note": p.get("note") or "", "value": round(values.get(p["id"], 0), 1),
                           **{k: p.get(k) for k in ("basis", "recent", "upcoming")}}
+        lost = {d: l for d, l in drop["games"].items() if d >= day}  # the dropped player's games from that day on
         moves.append({"day": day, "add": side(fa), "drop": side(drop),
                       "games": sorted(games), "why": fa.get("note", ""),
-                      "kind": "stream" if dw > 0 else "upgrade", "week": dw, "value": round(dv, 2),
+                      "kind": "stream" if pick[0][0] else "upgrade", "week": dw, "value": round(dv, 2),
+                      # what each side brings to or takes from this week's matchup: games and summed stats
+                      "add_stats": {k: sum(l.get(k, 0) for l in games.values()) for k in KEYS},
+                      "drop_stats": {k: sum(l.get(k, 0) for l in lost.values()) for k in KEYS},
+                      "expected": [round(sum(prob_before.values()), 2), round(sum(prob.values()), 2)],
+                      "win": [round(win_chance(prob_before), 3), round(win_chance(prob), 3)],
                       "next_games": next_games.get(fa["id"], 0),
                       # the numbers behind the move, for the "why" on each card
                       "add_games": add_games, "drop_games": drop_games,

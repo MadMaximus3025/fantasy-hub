@@ -72,6 +72,28 @@ sfa = [{"id": 5, "name": "Streamer", "lines": {D[1]: big}}]
 assert st.plan(D, 1, star, opp, cur, sfa, droppable={1}, acquisitions=2, values={1: 4.0, 5: 0.0}, next_games={1: 4})["moves"] == []
 assert st.plan(D, 1, star, opp, cur, sfa, droppable={1}, acquisitions=2, values={1: 0.5, 5: 0.0}, next_games={1: 4})["moves"][0]["kind"] == "stream"
 
+# win this week first: a stream that helps this week beats an upgrade worth more over two weeks
+pri = st.plan(D, 2, me, opp, cur, fa + [{"id": 13, "name": "Next Week Star", "lines": {}}], droppable={2}, acquisitions=1,
+              values={2: -1.0, 10: 0.0, 13: 5.0}, next_games={10: 1, 13: 4})
+assert [(x["kind"], x["add"]["name"]) for x in pri["moves"]] == [("stream", "Streamer")], pri["moves"]
+m0 = pri["moves"][0]
+assert m0["expected"][1] > m0["expected"][0] and 0 <= m0["win"][0] <= m0["win"][1] <= 1, m0
+assert m0["add_stats"]["PTS"] == 60 and m0["drop_stats"]["PTS"] == (2 if m0["day"] == D[0] else 0), m0  # what each side changes this week
+
+# next-week upgrades only touch locked categories: costing a close category this week blocks it
+close = {"FG%": .5, "FT%": .8, "3PM": 23, "PTS": 271, "REB": 111, "AST": 66, "STL": 17, "BLK": 9, "TO": 38}  # all near-even
+keep = [{"id": 1, "name": "Starter", "games": {D[1]: big}}]
+later = [{"id": 6, "name": "Later", "lines": {}}]
+assert st.plan(D, 1, keep, close, cur, later, droppable={1}, acquisitions=1, values={1: 0.0, 6: 3.0},
+               next_games={1: 3, 6: 3})["moves"] == []  # dropping Thursday's starter costs close categories now
+locked = {"FG%": .1, "FT%": .1, "3PM": 0, "PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 999}  # all won already
+up2 = st.plan(D, 1, keep, locked, {**cur, "FG%": .5, "FT%": .8}, later, droppable={1}, acquisitions=1, values={1: 0.0, 6: 3.0}, next_games={1: 3, 6: 3})
+assert [x["kind"] for x in up2["moves"]] == ["upgrade"], up2["moves"]  # everything locked: next week may come first
+
+# odds: a big lead with little left is near-certain; an even category is a coin flip; 5+ of 9 wins the matchup
+pr = st.odds({**close, "PTS": 400}, close, {"PTS": 20}, {"PTS": 20})
+assert pr["PTS"] > 0.99 and abs(pr["REB"] - 0.5) < 1e-9 and abs(st.win_chance({c: 0.5 for c in st.CATS}) - 0.5) < 1e-9, pr
+
 # player values: better per-game lines score higher; efficient shooting counts; turnovers hurt
 lines = {1: line(PTS=25, REB=8, AST=6, STL=1, BLK=1, **{"3PM": 3}, TO=2, FGM=9, FGA=17, FTM=4, FTA=5),
          2: line(PTS=8, REB=3, AST=1, TO=1, FGM=3, FGA=9, FTM=1, FTA=2),
