@@ -751,7 +751,7 @@ function moveWhy(m) {
     <li><b>Why ${m.kind === "upgrade" ? "an upgrade" : "a stream"}</b>: ${m.kind === "upgrade"
       ? "no pickup helps this week's matchup any more, so this one is for next week: at least +2 value over this week and next, costing this week only categories that are already decided."
       : "raises the categories you're expected to win this week (winning this matchup comes first), while costing at most 4 value over the two weeks."}
-      Moves are judged half against your opponent as he stands and half against his best streaming (Scouting's worst case), so categories he could take count more.</li></ul></details>`;
+      Moves are judged 70% against your opponent as he stands and 30% against his best streaming (Scouting's worst case), so categories he could take count more.</li></ul></details>`;
 }
 
 function planCard(s) {
