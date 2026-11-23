@@ -18,7 +18,7 @@ STREAM_MIN = 0.10       # a stream must add at least this many expected categori
 STREAM_TOLERANCE = 4.0  # ...and may cost at most this much two-week value (about 1 per game over ~4 games)
 UPGRADE_MIN = 2.0       # an upgrade for next week must add at least this much two-week value
 LOCKED_COST = 0.02      # ...and may cost this week at most this many expected categories (locked ones only)
-PROTECT_WEIGHT = 0.5    # with the opponent's worst case: half "he stands pat", half "he streams as well as he can"
+PROTECT_WEIGHT = 0.3    # with the opponent's worst case: 70% "he stands pat", 30% "he streams as well as he can"
 SPREAD = {"PTS": 2, "REB": 1.5, "AST": 1.5, "STL": 1.2, "BLK": 1.5, "3PM": 1.3, "TO": 1.2}  # same as the dashboard
 
 
