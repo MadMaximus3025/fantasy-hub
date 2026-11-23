@@ -617,6 +617,7 @@ g = lambda d, pts, mins="30": {"date": d, "opp": "BOS", "at": "@", "result": "",
      "3PM": "1", "PTS": str(pts), "REB": "4", "AST": "3", "STL": "1", "BLK": "0", "TO": "2"}}
 server.fetch_gamelog = lambda pid, season: {801: [g("2026-11-18", 20), g("2026-11-16", 15), g("2026-11-14", 99)],  # 11/14: before the add
                                             802: [g("2026-11-17", 8), g("2026-11-19", 0, "0")]}[pid]  # 11/19: DNP
+server._feed.clear()
 pk, pk_skipped = server.pickup_record(rec_league, me, TODAY)
 assert pk_skipped == []
 assert len(pk) == 1 and pk[0]["add"] == "Adder" and pk[0]["games"] == [1, 1], pk  # other teams' moves left out; today's game not yet
@@ -624,7 +625,9 @@ assert pk[0]["add_totals"]["PTS"] == 15 and pk[0]["through"] == "2026-11-17" and
 assert pk[0]["net"]["PTS"] == 7 and pk[0]["net"]["FG%"] == 0 and pk[0]["still_yours"] and pk[0]["value"] > 0, pk  # net per cat + overall
 later_drop = NS(date=datetime(2026, 11, 17, 9).timestamp() * 1000, actions=[(me, "DROPPED", "Adder", "")])
 rec_league2 = NS(recent_activity=lambda size, offset=0: [later_drop, act] if offset == 0 else [], player_map=rec_league.player_map)
+server._feed.clear()
 pk2, _ = server.pickup_record(rec_league2, me, TODAY)
+server._feed.clear()
 assert pk2[0]["through"] == "2026-11-16" and not pk2[0]["still_yours"] and pk2[0]["games"] == [1, 0], pk2  # his time on your team only
 
 # lineups: the site's start/sit rule replayed on a past day with projections from earlier games only
@@ -642,5 +645,38 @@ assert lr and lr[-1]["site_starts"] == ["Benched Star"] and lr[-1]["you_started"
 assert lr[-1]["result"]["PTS"] == "W" and lr[-1]["won"] >= 1, lr[-1]
 server.fetch_gamelog, server.datetime = real_log, real_dt
 server.day_lineups, server.lineup_slots, server.scoring_period = saved_dl, saved_ls, saved_sp
+
+# streaming habits: adds per finished week per team from the feed; the protect weight follows the opponent's rate
+wk = lambda y, m, d: NS(date=datetime(y, m, d, 12).timestamp() * 1000, actions=[(opp, "FA ADDED", "X", "")])
+feed = [wk(2026, 11, 3), wk(2026, 11, 4), wk(2026, 11, 5), wk(2026, 11, 10), wk(2026, 11, 17),  # opp: 4 adds in 2 finished weeks
+        NS(date=datetime(2026, 11, 11, 12).timestamp() * 1000, actions=[(me, "FA ADDED", "Y", "")]),  # you: 1
+        NS(date=datetime(2026, 11, 18, 12).timestamp() * 1000, actions=[(opp, "FA ADDED", "Z", "")])]  # 11/17-18: this week, not counted
+server._feed.clear()
+hab_league = NS(recent_activity=lambda size, offset=0: feed if offset == 0 else [], teams=[me, opp])
+avg, lg_avg = server.streaming_habits(hab_league, TODAY)
+assert avg == {me.team_id: 0.5, opp.team_id: 2.0} and lg_avg == 1.25, (avg, lg_avg)
+w, info = server.protect_weight(hab_league, opp, TODAY)
+assert w == 0.48 and info["his"] == 2.0, (w, info)  # 0.3 x 2.0 / 1.25, under the 0.6 cap
+assert server.protect_weight(hab_league, me, TODAY)[0] == 0.12  # rarely streams: little to guard against
+server._feed.clear()
+
+# calibration: a finished week replayed from each morning; win chances against the final category results
+ta_, tb_ = NS(team_id=1), NS(team_id=2)
+W1 = [date(2026, 11, 9) + timedelta(days=i) for i in range(7)]  # last week, Mon-Sun
+st_ = lambda pts: {k: 0 for k in ("PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FGM", "FGA", "FTM", "FTA")} | {"PTS": pts, "FGM": 4, "FGA": 9}
+lu_c = {d: {1: {501: st_(30)}, 2: {502: st_(10)}} for d in W1}
+ros_c = {d: {1: {501: {"playerPoolEntry": {"player": {"proTeamId": 1}}}}, 2: {502: {"playerPoolEntry": {"player": {"proTeamId": 2}}}}} for d in W1}
+sched = {1: {str(i): [{"date": datetime(d.year, d.month, d.day, 19).timestamp() * 1000}] for i, d in enumerate(W1)},
+         2: {str(i): [{"date": datetime(d.year, d.month, d.day, 19).timestamp() * 1000}] for i, d in enumerate(W1)}}
+cats_c = {c: {"score": 0, "result": "WIN"} for c in ("PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%")}
+cal_league = NS(currentMatchupPeriod=2, settings=NS(matchup_periods={}), pro_schedule=sched, scoringPeriodId=1,
+                scoreboard=lambda w: [NS(home_team=ta_, away_team=tb_, home_team_cats=cats_c)])
+real_dl, real_log = server.day_lineups, server.fetch_gamelog
+server.day_lineups = lambda *a: (lu_c, ros_c)
+server.fetch_gamelog = lambda pid, season: [g("2026-11-01", 30 if pid == 501 else 10)]
+rep = server.calibration_report(cal_league, TODAY)
+assert rep["rows"] == 7 * 9 and set(rep["cats"]) == set(server.streaming.CATS), rep.get("rows")
+assert rep["cats"]["PTS"]["site"]["now"][0] < 0.2 and set(rep["cats"]["FG%"]) == {"site", "full"}, rep["cats"]["PTS"]  # a 30-v-10 week: confident and right
+server.day_lineups, server.fetch_gamelog = real_dl, real_log
 
 print("ok")
