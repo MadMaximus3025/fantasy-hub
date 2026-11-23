@@ -1012,10 +1012,10 @@ def pickup_record(league, me, today):
         acts = [(action, player) for team, action, player, *_ in a.actions if getattr(team, "team_id", None) == me.team_id]
         adds = [pl for action, pl in acts if action in ("FA ADDED", "WAIVER ADDED")]
         drops = [pl for action, pl in acts if action == "DROPPED"]
-        if adds:
-            moves.append((datetime.fromtimestamp(a.date / 1000).date(), adds[0], drops[0] if drops else None))
+        for i, add in enumerate(adds):  # several adds in one move: pair them with the drops in order
+            moves.append((datetime.fromtimestamp(a.date / 1000).date(), add, drops[i] if i < len(drops) else None))
     ids = lambda name: league.player_map.get(name) if isinstance(league.player_map.get(name), int) else None
-    out = []
+    out, skipped = [], []
     for day, add, drop in moves:
         end = min(week_bounds(day)[1], today - timedelta(days=1))
         if end < day:
@@ -1023,21 +1023,23 @@ def pickup_record(league, me, today):
         def games(name):
             pid = ids(name)
             if not pid:
-                return None
+                return f"no ESPN id for {name}"
             try:
                 return [stat_line(g) for g in fetch_gamelog(pid, current_season()) if day.isoformat() <= g["date"] <= end.isoformat()
                         and (g["stats"].get("MIN") or "0") not in ("0", "", "-")]
-            except Exception:
-                return None
+            except Exception as e:
+                return f"no game log for {name}: {e}"
         ga, gd = games(add), games(drop) if drop else []
-        if ga is None or gd is None:
+        bad = [x for x in (ga, gd) if isinstance(x, str)]
+        if bad:
+            skipped.append({"date": day.isoformat(), "add": add, "drop": drop, "reason": "; ".join(bad)})
             continue
         ta, td = total(ga), total(gd)
         res = cat_verdict(ta, td)
         out.append({"date": day.isoformat(), "through": end.isoformat(), "add": add, "drop": drop, "games": [len(ga), len(gd)],
                     "add_totals": ta, "drop_totals": td, "result": res,
                     "won": sum(r == "W" for r in res.values()), "lost": sum(r == "L" for r in res.values())})
-    return out
+    return out, skipped
 
 
 def lineup_record(league, me, today):
@@ -1118,7 +1120,8 @@ def record(refresh: bool = False):
     today = datetime.now().date()
     errors = []
     try:
-        pickups = pickup_record(league, me, today)
+        pickups, skipped = pickup_record(league, me, today)
+        errors += [f"couldn't grade {x['add']} ({x['date']}): {x['reason']}" for x in skipped]
     except Exception as e:
         logging.exception("Couldn't rebuild the pickup record")
         pickups, _ = [], errors.append(f"pickups: {e}")
