@@ -109,6 +109,13 @@ assert st.plan(D, 2, pg_start, opp, cur, [center], droppable={2}, acquisitions=1
 both = st.plan(D, 2, pg_start, opp, cur, [guard, center], droppable={2}, acquisitions=1, lineup=LU)
 assert both["moves"][0]["add"]["name"] == "Center", both["moves"]
 
+# IR: an OUT player can go to an open IR spot instead of being dropped; nothing needs to be marked droppable
+hurt = [{"id": 1, "name": "Starter", "games": {D[0]: big}}, {"id": 7, "name": "Hurt", "games": {}}]
+ir = st.plan(D, 2, hurt, opp, cur, fa, droppable=set(), acquisitions=2, ir_spots=1, ir_ids={7})
+assert [(m["drop"]["name"], m["ir"]) for m in ir["moves"]] == [("Hurt", True)], ir["moves"]  # one IR spot: one move
+assert st.plan(D, 2, hurt, opp, cur, fa, droppable=set(), acquisitions=2, ir_spots=0, ir_ids={7})["moves"] == []  # IR full
+assert st.plan(D, 2, hurt, opp, cur, fa, droppable={7}, acquisitions=2)["moves"][0]["ir"] is False  # no IR spot: a real drop
+
 # player values: better per-game lines score higher; efficient shooting counts; turnovers hurt
 lines = {1: line(PTS=25, REB=8, AST=6, STL=1, BLK=1, **{"3PM": 3}, TO=2, FGM=9, FGA=17, FTM=4, FTA=5),
          2: line(PTS=8, REB=3, AST=1, TO=1, FGM=3, FGA=9, FTM=1, FTA=2),

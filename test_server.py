@@ -586,4 +586,10 @@ sp = NS(playerId=7, lineupSlot="BE")
 assert server.slot_on(sp, 1, TODAY, {TODAY: {1: {7: {"lineupSlotId": 11}}}}) == "UT"  # moved into a UTIL spot for that day
 assert server.slot_on(sp, 1, TODAY, {TODAY: {1: {}}}) is None and server.slot_on(sp, 1, TODAY, {}) == "BE"  # dropped / no data
 
+# IR: open spots = league's IR count - players already there; candidates = OUT players not on IR yet
+irl = NS(espn_request=NS(league_get=lambda params: {"settings": {"rosterSettings": {"lineupSlotCounts": {"0": 1, "13": 2}}}}))
+team = [NS(playerId=1, lineupSlot="IR", injuryStatus="OUT"), NS(playerId=2, lineupSlot="G", injuryStatus="OUT"),
+        NS(playerId=3, lineupSlot="BE", injuryStatus="DAY_TO_DAY")]
+assert server.ir_open(irl, team) == (1, {2})
+
 print("ok")

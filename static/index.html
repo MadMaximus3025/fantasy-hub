@@ -652,6 +652,8 @@ async function loadStream(plan = false) {
     if (!r.ok) throw new Error(j.detail);
     stream.data = j;
     if (plan) stream.plan = j.plan || null;
+    // an open IR spot and an OUT player to put there: plan right away, nothing needs to be marked droppable
+    if (!plan && !stream.plan && j.ir?.open && j.ir.ids?.length) setTimeout(() => loadStream(true));
     stream.error = null;
   } catch (e) {
     stream.error = e.message;
@@ -673,7 +675,9 @@ function streamView() {
       <span><b>${esc(p.name)}</b>${p.injury ? ` <span class="inj">${esc(p.injury.replace("_", " "))}</span>` : ""}${p.pending ? ` <span class="pend">${esc(p.pending)}</span>` : ""}
       <small>${esc(p.slot || "–")} · ${esc(p.team)} · ${p.starts_left} starts left this week${p.value != null ? ` · overall value ${p.value >= 0 ? "+" : ""}${p.value}` : ""}</small></span>
       <button class="switch" role="switch" data-drop="${p.id}" aria-checked="${drops.has(p.id)}" aria-label="${esc(p.name)} droppable">${drops.has(p.id) ? "Droppable" : "Stay"}</button></div>`).join("");
-  const setup = `<section class="card"><h2>Who can go?</h2><p class="muted">Flip players to Droppable; the plan updates right away.</p>${roster}
+  const irNames = (s.ir?.open ? s.roster.filter(p => s.ir.ids.includes(p.id)).map(p => esc(p.name)) : []);
+  const irNote = irNames.length ? `<p><b>${s.ir.open} IR spot${s.ir.open === 1 ? "" : "s"} open:</b> the plan can move ${irNames.join(", ")} (OUT) to IR to make room for a pickup, without dropping him.</p>` : "";
+  const setup = `<section class="card"><h2>Who can go?</h2><p class="muted">Flip players to Droppable; the plan updates right away.</p>${irNote}${roster}
     <div class="acq"><label for="acq"><b>Max adds</b></label>
       <input id="acq" type="number" inputmode="numeric" min="0" max="20" value="${esc(stream.acq ?? a.left ?? "")}">
       <span class="muted">${acqNote}</span></div>
@@ -760,9 +764,9 @@ function planCard(s) {
         ${m.games.length ? `counts ${m.games.length} game${m.games.length === 1 ? "" : "s"} this week (${m.games.map(gameDay).join(", ")})` : "no games left this week"}${(m.benched || []).length ? ` · not counted: ${m.benched.map(gameDay).join(", ")} (no open slot for his positions)` : ""} · ${m.next_games} next week</div>
       <div class="rd-wrap">${radar(left, right, m.add.name, m.drop.name)}
         <div class="rd-legend"><div class="rd-head"><span>Projected per game</span><span>9-cat value</span></div>
-          ${[[m.add, "a", "Add", m.games.length, 1], [m.drop, "b", "Drop", m.drop_week, -1]].map(([x, k, verb, n, sign]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
+          ${[[m.add, "a", "Add", m.games.length, 1], [m.drop, "b", m.ir ? "Move to IR:" : "Drop", m.drop_week, -1]].map(([x, k, verb, n, sign]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
             <img class="pic sm" src="${headshot(x.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-            <span><b>${verb} ${esc(x.name)}</b><small>${n != null ? gamesText(n, sign) : adjText(x)}</small></span>
+            <span><b>${verb} ${esc(x.name)}</b><small>${k === "b" && m.ir ? "OUT · stays on your team; frees a roster spot" : n != null ? gamesText(n, sign) : adjText(x)}</small></span>
             <b class="${x.value >= 0 ? "pos" : "neg"}">${x.value >= 0 ? "+" : ""}${(x.value ?? 0).toFixed(1)}</b></div>`).join("")}
           ${m.change ? netLine(m) : ""}
           <p class="muted">Bigger on an axis = better there (TO: fewer). Values: <span class="rd-a">add</span> · drop.</p></div></div>
@@ -1075,10 +1079,10 @@ function netLine(m) {
 function formTable(m) {
   const name = x => esc(x.name.replace(/ \(\w+\)$/, ""));
   const cols = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"];
-  const rows = [[m.add, "Add"], [m.drop, "Drop"]].flatMap(([x, verb]) => (x.recent || []).map((g, i) => `<tr>
+  const rows = [[m.add, "Add"], [m.drop, m.ir ? "IR" : "Drop"]].flatMap(([x, verb]) => (x.recent || []).map((g, i) => `<tr>
     <th scope="row">${i ? "" : `${verb} ${name(x)}`}</th><td>${gameDay(g.date)}</td><td>${g.at === "@" ? "@" : "vs"} ${esc(g.opp)}</td>
     <td>${Math.round(g.MIN)}</td>${cols.map(c => `<td>${+g[c]}</td>`).join("")}<td>${pct(`${g.FGM}-${g.FGA}`)}</td><td>${pct(`${g.FTM}-${g.FTA}`)}</td></tr>`));
-  const ahead = [[m.add, "Add"], [m.drop, "Drop"]].map(([x, verb]) => `<li><b>${verb} ${name(x)}</b>: ${(x.upcoming || []).length
+  const ahead = [[m.add, "Add"], [m.drop, m.ir ? "IR" : "Drop"]].map(([x, verb]) => `<li><b>${verb} ${name(x)}</b>: ${(x.upcoming || []).length
     ? x.upcoming.map(g => `${gameDay(g.date)} ${esc(g.opp)}`).join(" · ") : "no games through next week"}</li>`).join("");
   return `${rows.length ? `<div class="h2h-scroll"><table class="last3"><caption>Last 3 games</caption>
       <thead><tr><th scope="col">Player</th><th scope="col">Date</th><th scope="col">Opp</th><th scope="col">MIN</th>${cols.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">FG%</th><th scope="col">FT%</th></tr></thead>

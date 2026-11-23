@@ -154,7 +154,7 @@ def record(res):
 
 
 def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None,
-         opp_rem=None, lineup=None):
+         opp_rem=None, lineup=None, ir_spots=0, ir_ids=None):
     """Greedy week plan.
 
     days: remaining dates in order. slots: starting spots per day.
@@ -167,12 +167,16 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     lineup: the league's starting slots (e.g. ["PG", "SG", ..., "UT"]); with players' "elig" slot lists, a pickup's
     game only counts on a day he fits into the lineup next to everyone already starting (positions checked).
     Without it, a game counts while fewer than `slots` players start that day.
+    ir_spots / ir_ids: open IR spots and OUT players not on IR yet. Moving one to IR frees a roster spot like a drop
+    (he plays no games either way) but keeps him, so it costs no value; at most ir_spots such moves are made.
     Each step tries every add (today or on one of the free agent's game days) with every allowed drop. This week
     comes first: a stream raises the categories you expect to win this week (by STREAM_MIN+) without costing much
     two-week value, and the best stream wins. Only when no stream helps, an upgrade may be made: clear value this
     week + next that costs this week nothing but locked categories. Stops when no move qualifies or adds run out.
     """
     values, next_games = values or {}, next_games or {}
+    ir_ids = set(ir_ids or ())
+    ir_left = [ir_spots]  # IR spots still open
     roster = [dict(p, games=dict(p["games"])) for p in mine]
     used = {d: sum(d in p["games"] for p in roster) for d in days}
     added_on = {}  # free agents you add can be dropped again later (streaming), but only after the day they were added
@@ -223,7 +227,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                     if drop["id"] in added_on:
                         if added_on[drop["id"]] >= day:  # a streamer can only be dropped after the day you added him
                             continue
-                    elif drop["id"] not in droppable:
+                    elif drop["id"] not in droppable and not (drop["id"] in ir_ids and ir_left[0] > 0):
                         continue
                     new_roster, new_used, games = apply(fa, drop, day)
                     s = score(totals(current, new_roster), opp_totals)
@@ -255,6 +259,8 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         best = s
         added_on[fa["id"]] = day
         dropped.add(drop["id"])
+        to_ir = drop["id"] in ir_ids and ir_left[0] > 0  # an OUT player goes to IR instead of being released
+        ir_left[0] -= to_ir
         # display: the per-game projection the plan used, why, his last games and his games ahead
         side = lambda p: {"id": p["id"], "name": p["name"], "line": p.get("per_game") or p.get("season"),
                           "factor": p.get("factor") or 1, "note": p.get("note") or "", "value": round(values.get(p["id"], 0), 1),
@@ -264,7 +270,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                       "games": sorted(games), "why": fa.get("note", ""),
                       # his games from the add day on that can't count: lineup full, or no open slot for his positions
                       "benched": sorted(d for d in fa["lines"] if d >= day and d not in games),
-                      "kind": "stream" if pick[0][0] else "upgrade", "week": dw, "value": round(dv, 2),
+                      "kind": "stream" if pick[0][0] else "upgrade", "week": dw, "value": round(dv, 2), "ir": to_ir,
                       # what each side brings to or takes from this week's matchup: games and summed stats
                       "add_stats": {k: sum(l.get(k, 0) for l in games.values()) for k in KEYS},
                       "drop_stats": {k: sum(l.get(k, 0) for l in lost.values()) for k in KEYS},

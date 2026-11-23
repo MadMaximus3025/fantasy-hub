@@ -759,10 +759,18 @@ def lineup_slots(league):
             slots = [POSITION_MAP[int(k)] for k, n in counts.items() for _ in range(int(n))
                      if POSITION_MAP.get(int(k)) not in (None, "", "BE", "IR")]
             league._lineup_slots = slots or None
+            league._ir_slots = sum(int(n) for k, n in counts.items() if POSITION_MAP.get(int(k)) == "IR")
         except Exception:
             logging.exception("Couldn't read the league's lineup slots")
-            league._lineup_slots = None
+            league._lineup_slots, league._ir_slots = None, 0
     return league._lineup_slots
+
+
+def ir_open(league, roster):
+    """(open IR spots, ids of OUT players not on IR yet): moving one there frees a roster spot without dropping him."""
+    lineup_slots(league)  # reads the IR count too
+    used = sum(1 for p in roster if p.lineupSlot == "IR")
+    return max(0, getattr(league, "_ir_slots", 0) - used), {p.playerId for p in roster if p.injuryStatus == "OUT" and p.lineupSlot != "IR"}
 
 
 def acquisitions_left(league, me, first, last, week):
@@ -821,6 +829,8 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
            "roster": [{"id": p.playerId, "name": p.name, "team": p.proTeam, "slot": p.lineupSlot,
                        "injury": p.injuryStatus if p.injuryStatus not in (None, "ACTIVE") else None, "pending": getattr(p, "pending", None),
                        "starts_left": len(game_lines(p, me.team_id, lineups, now, first, last))} for p in keepers]}
+    ir_spots, ir_ids = ir_open(league, keepers)
+    out["ir"] = {"open": ir_spots, "ids": sorted(ir_ids)}  # OUT players the plan may move to IR
     if not (plan and opp):
         return out
     roster_ids = {p.playerId for p in keepers}  # a player already dropped can't be dropped again
@@ -863,6 +873,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
         opp_rem=streaming.remaining(opp_players),
         lineup=lineup_slots(league),
+        ir_spots=ir_spots, ir_ids=ir_ids,
     )
     out["plan"]["opp_current"] = scores(opp_cats)
     out["plan"]["opp_players"] = streaming.rows(opp_players)
