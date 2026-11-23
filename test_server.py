@@ -601,4 +601,40 @@ team = [NS(playerId=1, lineupSlot="IR", injuryStatus="OUT"), NS(playerId=2, line
         NS(playerId=3, lineupSlot="BE", injuryStatus="DAY_TO_DAY")]
 assert server.ir_open(irl, team) == (1, {2})
 
+saved_dl, saved_ls, saved_sp = server.day_lineups, server.lineup_slots, server.scoring_period
+# track record: per-category verdicts (TO fewer wins, % from makes/attempts)
+z0 = {k: 0 for k in ("PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FGM", "FGA", "FTM", "FTA")}
+v = server.cat_verdict(dict(z0, PTS=10, TO=1, FGM=5, FGA=10), dict(z0, PTS=8, TO=3, FGM=4, FGA=10))
+assert v["PTS"] == "W" and v["TO"] == "W" and v["FG%"] == "W" and v["FT%"] == "T" and v["REB"] == "T", v
+assert server.cat_verdict(dict(z0, FGM=1, FGA=2), z0)["FG%"] == "W"  # no attempts on the other side
+
+# pickups: an add graded on his games from the add day to Sunday vs the dropped player's
+real_log, real_dt = server.fetch_gamelog, server.datetime
+mon_add = datetime(2026, 11, 16, 9).timestamp() * 1000  # Monday morning
+act = NS(date=mon_add, actions=[(me, "FA ADDED", "Adder", ""), (me, "DROPPED", "Dropper", ""), (opp, "FA ADDED", "Other", "")])
+rec_league = NS(recent_activity=lambda size: [act], player_map={"Adder": 801, "Dropper": 802, 801: "Adder", 802: "Dropper"})
+g = lambda d, pts, mins="30": {"date": d, "opp": "BOS", "at": "@", "result": "", "stats": {"MIN": mins, "FG%": "5-10", "FT%": "2-2",
+     "3PM": "1", "PTS": str(pts), "REB": "4", "AST": "3", "STL": "1", "BLK": "0", "TO": "2"}}
+server.fetch_gamelog = lambda pid, season: {801: [g("2026-11-18", 20), g("2026-11-16", 15), g("2026-11-14", 99)],  # 11/14: before the add
+                                            802: [g("2026-11-17", 8), g("2026-11-19", 0, "0")]}[pid]  # 11/19: DNP
+pk = server.pickup_record(rec_league, me, TODAY)
+assert len(pk) == 1 and pk[0]["add"] == "Adder" and pk[0]["games"] == [1, 1], pk  # other teams' moves left out; today's game not yet
+assert pk[0]["add_totals"]["PTS"] == 15 and pk[0]["through"] == "2026-11-17" and pk[0]["result"]["PTS"] == "W", pk  # through yesterday
+
+# lineups: the site's start/sit rule replayed on a past day with projections from earlier games only
+YDAY = TODAY - timedelta(days=1)
+ent = lambda pid, name, slot, pts, elig: {"lineupSlotId": slot, "playerPoolEntry": {"player": {"fullName": name, "eligibleSlots": elig,
+     "stats": [{"scoringPeriodId": 29, "statSourceId": 0, "stats": {"0": pts, "13": 4, "14": 9}}]}}}
+day_roster = {1: {901: ent(901, "Benched Star", 12, 30, [0, 11]), 902: ent(902, "Started Scrub", 0, 2, [0, 11])}}
+server.day_lineups = lambda *a: ({}, {YDAY: day_roster})
+server.lineup_slots = lambda lg: ["PG"]
+server.scoring_period = lambda lg, d, t: 29
+server.datetime = NS(now=lambda: NOW, fromisoformat=datetime.fromisoformat, fromtimestamp=datetime.fromtimestamp)
+server.fetch_gamelog = lambda pid, season: [g("2026-11-10", 25 if pid == 901 else 4)]  # earlier games: star 25, scrub 4
+lr = server.lineup_record(NS(currentMatchupPeriod=5, settings=NS(matchup_periods={})), me, TODAY)
+assert lr and lr[-1]["site_starts"] == ["Benched Star"] and lr[-1]["you_started"] == ["Started Scrub"], lr
+assert lr[-1]["result"]["PTS"] == "W" and lr[-1]["won"] >= 1, lr[-1]
+server.fetch_gamelog, server.datetime = real_log, real_dt
+server.day_lineups, server.lineup_slots, server.scoring_period = saved_dl, saved_ls, saved_sp
+
 print("ok")

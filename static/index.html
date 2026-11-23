@@ -358,7 +358,7 @@
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
     <button class="menu-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="pages"><svg class="i-open" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><svg class="i-close" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#today">Today</a><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#scout">Scouting</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
+    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#today">Today</a><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#scout">Scouting</a><a class="button" href="#accuracy">Track record</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -557,10 +557,54 @@ function accDiff(c, proj, act) {
   return `<span class="${Math.abs(d) < (c.endsWith("%") ? 0.5 : 2) ? "" : good ? "pos" : "neg"}">${text}</span>`;
 }
 
+// ---- Track record (top of #accuracy): your pickups and the site's start/sit calls, graded on real games ----
+const rec = { data: null, loading: false, error: null };
+
+async function loadRecord() {
+  rec.loading = true;
+  try {
+    const r = await fetch("/api/record");
+    const j = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));
+    if (!r.ok) throw new Error(j.detail);
+    rec.data = j; rec.error = null;
+  } catch (e) { rec.error = e.message; }
+  rec.loading = false;
+  if (location.hash === "#accuracy" && lastData) render(lastData);
+}
+
+function recordCards() {
+  if (!rec.data) {
+    if (!rec.loading && !rec.error) loadRecord();
+    return `<section class="card wide"><h2>Track record</h2>${rec.error ? `<p class="error">Could not load: ${esc(rec.error)}</p>` : '<p class="muted">Rebuilding your moves and lineups from ESPN…</p>'}</section>`;
+  }
+  const { pickups, lineups, errors } = rec.data;
+  const cats = r => CATS9.map(c => `<td class="${r[c] === "W" ? "pos" : r[c] === "L" ? "neg" : "muted"}">${r[c]}</td>`).join("");
+  const head = `${CATS9.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">Won</th>`;
+  const verdict = x => `<td><b class="${x.won > x.lost ? "pos" : x.won < x.lost ? "neg" : ""}">${x.won}-${x.lost}</b></td>`;
+  const pw = pickups.filter(x => x.won > x.lost).length, pl = pickups.filter(x => x.won < x.lost).length;
+  const pickRows = pickups.map(x => `<tr><th scope="row">${esc(x.add)}<small>for ${esc(x.drop || "an open spot")} · ${gameDay(x.date)}–${gameDay(x.through)} · ${x.games[0]} vs ${x.games[1]} games</small></th>${cats(x.result)}${verdict(x)}</tr>`).join("");
+  const diff = lineups.filter(x => !x.same), lw = diff.filter(x => x.won > x.lost).length, ll = diff.filter(x => x.won < x.lost).length;
+  const luRows = diff.map(x => `<tr><th scope="row">${gameDay(x.date)}<small>site: ${x.site_starts.map(esc).join(", ")} · you: ${x.you_started.map(esc).join(", ")}</small></th>${cats(x.result)}${verdict(x)}</tr>`).join("");
+  return `<section class="card wide"><h2>Your pickups <small>graded on real games</small></h2>
+    ${pickups.length ? `<p><b>${pw} helped · ${pl} hurt · ${pickups.length - pw - pl} even</b> (by categories won: the player you added vs the one you dropped, same days)</p>
+      <div class="h2h-scroll"><table class="guide acc-games"><thead><tr><th scope="col">Added</th>${head}</tr></thead><tbody>${pickRows}</tbody></table></div>`
+      : '<p class="muted">No graded pickups in ESPN\'s recent activity yet.</p>'}
+    <p class="muted">Each add from ESPN's activity log: the added player's real games from the add day through that week's Sunday (or yesterday),
+      against the dropped player's games over the same days, wherever he played. W = the add did better in that category (TO: fewer).
+      Covers the league's latest 100 moves.</p></section>
+  <section class="card wide"><h2>Start/sit calls <small>this week and last</small></h2>
+    <p><b>${lineups.length - diff.length} of ${lineups.length} days the site's lineup matched yours.</b>${diff.length ? ` On the ${diff.length} other day${diff.length === 1 ? "" : "s"}: the site's picks did better on ${lw}, yours on ${ll}${diff.length - lw - ll ? `, even on ${diff.length - lw - ll}` : ""}.` : ""}</p>
+    ${diff.length ? `<div class="h2h-scroll"><table class="guide acc-games"><thead><tr><th scope="col">Day</th>${head}</tr></thead><tbody>${luRows}</tbody></table></div>` : ""}
+    <p class="muted">Each past day: the site's start/sit rule (the best 9-category value that fits your slots) replayed with projections from that player's
+      games before that day only, then compared on what the players it would have started instead actually did (W = the site's picks did better).
+      Only players who played that day are compared. The live Lineup page also weighs this week's close categories, which this replay can't.</p>
+    ${errors.length ? `<p class="error">${errors.map(esc).join(" · ")}</p>` : ""}</section>`;
+}
+
 function accuracyView() {
   if (!acc.data) {
     if (!acc.loading && !acc.error) loadAccuracy();
-    return `<section class="card wide">${acc.error ? `<p class="error">Could not load: ${esc(acc.error)}</p>` : '<p class="muted">Replaying your players\' games…</p>'}</section>`;
+    return recordCards() + `<section class="card wide">${acc.error ? `<p class="error">Could not load: ${esc(acc.error)}</p>` : '<p class="muted">Replaying your players\' games…</p>'}</section>`;
   }
   const { team, players, history } = acc.data;
   const tiles = CATS9.map(c => `<div class="tile"><div class="t-top"><span>${c}</span></div>
@@ -578,7 +622,7 @@ function accuracyView() {
         <button class="expand" data-acc="${pl.id}" aria-expanded="${open}" ${pl.games ? "" : "disabled"}>${esc(pl.name)}</button><small>${esc(pl.team)}</small></th>
       <td>${pl.games || "—"}</td>${CATS9.map(c => `<td>${pl.games ? accDiff(c, pl.proj, pl.actual) : "—"}</td>`).join("")}</tr>${games}`;
   }).join("");
-  return `<section class="card wide"><h2>How the projections did · your roster · ${team.games} games</h2>
+  return recordCards() + `<section class="card wide"><h2>How the projections did · your roster · ${team.games} games</h2>
       <div class="tiles">${tiles}</div>
       <p class="muted">Each game is projected the way the site projects (his recent games: 60% season / 40% last 7 games per minute, times his minutes in his last 3 games; role news can't be replayed for past games), using only the player's earlier games this season, then compared with what he actually did.
         Green = beat the projection, red = fell short (TO: fewer is better). Counting stats in %, FG%/FT% in percentage points. A game counts once a player has ${history} earlier games.</p>
