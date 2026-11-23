@@ -390,6 +390,16 @@ function teamLine(current, rows, avail) {
   return { tot, rem };
 }
 
+// The one matchup summary every page shows: projected record (who leads each category at the projected finish)
+// and categories expected (each category weighted by its chance of holding up), from the same totals and odds.
+function matchupSummary(d) {
+  const o = matchupOdds(d);
+  const res = Object.fromEntries(CATS9.map(c => [c, cmpCat(c, lineVal0(o.mine, c), lineVal0(o.theirs, c))]));
+  const [w, l, t] = tally(res);
+  return { o, res, w, l, record: `${w}-${l}${t ? `-${t}` : ""}`, text: `Projected ${w}-${l}${t ? `-${t}` : ""} · ${o.expected.toFixed(1)} categories expected` };
+}
+const lineVal0 = (tot, c) => tot[c] || 0;
+
 function matchupOdds(d) {
   const p = d.projection, av = p.availability || { mine: [], theirs: [] };
   const A = teamLine(p.current.mine, p.players.mine, av.mine), B = teamLine(p.current.theirs, p.players.theirs, av.theirs);
@@ -448,12 +458,12 @@ function matchupCard(d) {
     : `No category is a toss-up right now; ${o.win >= 0.5 ? "protect your leads" : "you need a big swing in several categories"}.`;
   const p = d.projection;
   return `<section class="card wide matchup">${head}<div class="mc-grid"><div>
-      <div class="mc-big"><span class="num">${o.expected.toFixed(1)}</span><span>of 9 categories expected</span></div>
+      <div class="mc-big"><span class="num">${matchupSummary(d).record}</span><span>projected · ${o.expected.toFixed(1)} categories expected</span></div>
       <p class="mc-sub">vs <b>${esc(d.opponent)}</b> ${(9 - o.expected).toFixed(1)} · <b class="${o.win >= 0.5 ? "pos" : "neg"}">${pc(o.win)}</b> to take more categories · ${final} of ${days.length} nights final · right now <b>${tally(d.projection.current.result).join("-")}</b></p>
       <div class="mc-labels"><span>You</span><span class="mc-key">thick = actual so far · thin = projected end · green = leading now</span><span>${esc(d.opponent)}</span><span>Win %</span></div>
       ${cats}
       <details class="breakdown"><summary>Per-player breakdown</summary>
-        <p class="muted">Starters in your set ESPN lineup: season average × games not started yet, added to this week's totals so far. Plays/Sits toggles aren't reflected here.</p>
+        <p class="muted">Starters in your set ESPN lineup: their projection × games not started yet, added to this week's totals so far. Plays/Sits toggles aren't reflected here.</p>
         ${breakdownTable("You", p.players.mine, p.current.mine, p.mine)}
         ${breakdownTable(d.opponent, p.players.theirs, p.current.theirs, p.theirs)}
       </details></div>
@@ -755,7 +765,7 @@ function planCard(s) {
   }).join("")}</ol>`
     : '<p class="muted">No pickup improves your projected result with these drops and adds. Try allowing more drops.</p>';
   return `<section class="card">${head}
-    <p><b>Projected ${p.before.record} → ${p.after.record}</b> (W-L-T)</p>${moves}
+    <p><b>Projected ${p.before.record.replace(/-0$/, "")}${p.before.expected != null ? ` · ${p.before.expected.toFixed(1)} categories expected` : ""} → ${p.after.record.replace(/-0$/, "")}${p.after.expected != null ? ` · ${p.after.expected.toFixed(1)}` : ""}</b> with this plan</p>${moves}
     <h2>Week with this plan</h2>${scoreLine(p.after.result, s.opponent)}
     ${vsHead({ name: "You · with plan", sub: "small: now" }, { name: s.opponent, sub: "Opponent" })}
     ${vsRows(CATS9, p.after.mine, p.theirs, p.after.result, fmt, c => "now " + fmt(c, p.before.mine[c]))}
@@ -776,8 +786,8 @@ function matchupGamesCard(d) {
   const mine = d.slate.mine, theirs = d.slate.theirs || mine.map(() => 0);
   const left = a => a.reduce((sum, n, i) => sum + (days[i] >= today ? n : 0), 0);
   const p = d.projection;
-  const [w, l] = p ? tally(p.result) : [0, 0];
-  const status = !p ? "Bye week" : w > l ? `Winning ${w}-${l}` : w < l ? `Losing ${w}-${l}` : `Tied ${w}-${l}`;
+  const sum = p ? matchupSummary(d) : null;
+  const status = sum ? sum.text : "Bye week";
   // projected category totals as paired bars; the leading side's bar is bright, its label colored
   const bars = p ? CATS9.map(c => {
     const a = p.mine[c] || 0, b = p.theirs[c] || 0, r = p.result[c], max = Math.max(a, b) || 1;
@@ -788,7 +798,7 @@ function matchupGamesCard(d) {
   }).join("") : "";
   return `<section class="card"><div class="slate-head"><h2>Your week · 9 cats · vs ${esc(d.opponent || "bye")}</h2>${weekPicker(d)}</div>
     <div class="gl-head"><span class="big you">${left(mine)}</span><small>games left<br>vs</small><span class="big opp">${left(theirs)}</span>
-      <span class="status ${w > l ? "pos" : w < l ? "neg" : ""}">${status}</span></div>
+      <span class="status ${sum && sum.w > sum.l ? "pos" : sum && sum.w < sum.l ? "neg" : ""}">${status}</span></div>
     ${bars}
     <p class="muted">Projected finish: this week's ESPN totals plus projections for starts left. Blue = you, orange = ${esc(d.opponent || "opponent")}; the leading side's bar is bright and the category turns green (you lead) or red (they lead). TO: fewer wins.</p></section>`;
 }

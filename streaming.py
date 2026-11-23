@@ -283,6 +283,9 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     return {"moves": sorted(moves, key=lambda m: m["day"]),
             "current": current,
             "players": rows(roster, tags),
-            "before": {"mine": start, "result": result(start, opp_totals), "record": record(result(start, opp_totals))},
-            "after": {"mine": end, "result": result(end, opp_totals), "record": record(result(end, opp_totals))},
+            # same odds as the dashboard: categories expected = each category's chance of being won, summed
+            "before": {"mine": start, "result": result(start, opp_totals), "record": record(result(start, opp_totals)),
+                       "expected": round(sum(chances([dict(p, games=dict(p["games"])) for p in mine]).values()), 2)},
+            "after": {"mine": end, "result": result(end, opp_totals), "record": record(result(end, opp_totals)),
+                      "expected": round(sum(chances(roster).values()), 2)},
             "theirs": opp_totals}
