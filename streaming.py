@@ -155,7 +155,7 @@ def record(res):
 
 
 def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None,
-         opp_rem=None, lineup=None, ir_spots=0, ir_ids=None, opp_worst=None):
+         opp_rem=None, lineup=None, ir_spots=0, ir_ids=None, opp_worst=None, protect=PROTECT_WEIGHT):
     """Greedy week plan.
 
     days: remaining dates in order. slots: starting spots per day.
@@ -169,7 +169,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     game only counts on a day he fits into the lineup next to everyone already starting (positions checked).
     Without it, a game counts while fewer than `slots` players start that day.
     opp_worst: {"totals", "rem"} of the opponent after his best streaming (Scouting's worst case). Then every chance is
-    the PROTECT_WEIGHT blend of "he stands pat" and "he streams hard", so moves that shore up the categories he could
+    the `protect` blend (default PROTECT_WEIGHT) of "he stands pat" and "he streams hard", so moves that shore up the categories he could
     take count more; moves report the categories they protect.
     ir_spots / ir_ids: open IR spots and OUT players not on IR yet. Moving one to IR frees a roster spot like a drop
     (he plays no games either way) but keeps him, so it costs no value; at most ir_spots such moves are made.
@@ -193,7 +193,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         if not opp_worst:
             return base
         w = worst_odds(r)
-        return {c: (1 - PROTECT_WEIGHT) * base[c] + PROTECT_WEIGHT * w[c] for c in CATS}
+        return {c: (1 - protect) * base[c] + protect * w[c] for c in CATS}
 
     worst_odds = lambda r: odds(totals(current, r), opp_worst["totals"], remaining(r), opp_worst["rem"])
     plain = lambda r: odds(totals(current, r), opp_totals, remaining(r), opp_rem)  # what the pages show

@@ -806,7 +806,7 @@ function moveWhy(m) {
     <li><b>Why ${m.kind === "upgrade" ? "an upgrade" : "a stream"}</b>: ${m.kind === "upgrade"
       ? "no pickup helps this week's matchup any more, so this one is for next week: at least +2 value over this week and next, costing this week only categories that are already decided."
       : "raises the categories you're expected to win this week (winning this matchup comes first), while costing at most 4 value over the two weeks."}
-      Moves are judged 70% against your opponent as he stands and 30% against his best streaming (Scouting's worst case), so categories he could take count more.</li></ul></details>`;
+      Moves are also judged against his best streaming (Scouting's worst case), weighted by how much he streams (30% for an average streamer), so categories he could take count more.</li></ul></details>`;
 }
 
 function planCard(s) {
@@ -1039,7 +1039,7 @@ function scoutView(d) {
   }).join("");
   return `<section class="card wide"><h2>Scouting · ${esc(sc.opponent)}</h2>
     <ul class="todo">
-      <li><b>His adds this week:</b> ${adds}.</li>
+      <li><b>His adds this week:</b> ${adds}.${sc.habits ? ` He averages <b>${sc.habits.his}</b> adds a week (league ${sc.habits.league}), so Streaming guards against his streaming at ${Math.round(sc.habits.weight * 100)}% weight.` : ""}</li>
       <li><b>Starts left:</b> you ${left(mine)} · him ${left(his)}${left(his) > left(mine) ? ` <span class="neg">(+${left(his) - left(mine)} for him)</span>` : ""}.</li>
       <li><b>Now:</b> Projected ${sc.now.record.replace(/-0$/, "")} · ${sc.now.expected.toFixed(1)} categories expected.
         <b>If he streams hard:</b> ${sc.worst.record.replace(/-0$/, "")} · ${sc.worst.expected.toFixed(1)}.

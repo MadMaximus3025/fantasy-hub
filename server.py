@@ -890,6 +890,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         lineup=lineup_slots(league),
         ir_spots=ir_spots, ir_ids=ir_ids,
         opp_worst={"totals": his_plan["after"]["mine"], "rem": his_rem} if his_plan["moves"] else None,
+        protect=protect_weight(league, opp, today)[0],
     )
     out["plan"]["opp_current"] = scores(opp_cats)
     out["plan"]["opp_players"] = streaming.rows(opp_players)
@@ -974,10 +975,193 @@ def scout(refresh: bool = False):
               "now": {**yours(his_plan["before"]), "prob": prob_now},
               "worst": {**yours(his_plan["after"]), "prob": prob_worst, "moves": his_plan["moves"]},
               "mine": before_mine, "theirs": before_his, "theirs_worst": his_plan["after"]["mine"],
-              "gaps": gaps, "roster": roster, "updated": datetime.now(timezone.utc).isoformat()}
+              "gaps": gaps, "roster": roster, "habits": protect_weight(league, opp, today)[1],
+              "updated": datetime.now(timezone.utc).isoformat()}
     _scout[week] = (time.time(), report)
     return report
 
+
+
+_feed = {}  # "feed" -> (time, activities)
+
+
+def league_feed(league):
+    """The league's activity feed, paged back through ESPN's slices (shortcut: at most 10 pages of 100), cached 10 min."""
+    hit = _feed.get("feed")
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    feed, seen = [], set()
+    for offset in range(0, 1000, 100):
+        page = league.recent_activity(size=100, offset=offset)
+        new = [a for a in page if (a.date, repr(a)) not in seen]
+        if not new:
+            break
+        seen.update((a.date, repr(a)) for a in new)
+        feed += new
+    _feed["feed"] = (time.time(), feed)
+    return feed
+
+
+def streaming_habits(league, today):
+    """Adds per finished Monday-Sunday week for every team, from the activity feed: {team_id: average}, and the league
+    average. Weeks count from each team's first week in the feed through last week."""
+    this_monday = week_bounds(today)[0]
+    per = {}  # team_id -> {monday: adds}
+    for a in league_feed(league):
+        day = datetime.fromtimestamp(a.date / 1000).date()
+        monday = week_bounds(day)[0]
+        if monday >= this_monday:
+            continue  # this week isn't finished
+        for team, action, *_ in a.actions:
+            if action in ("FA ADDED", "WAIVER ADDED") and getattr(team, "team_id", None) is not None:
+                per.setdefault(team.team_id, {}).setdefault(monday, 0)
+                per[team.team_id][monday] += 1
+    first = min((m for weeks in per.values() for m in weeks), default=None)
+    if first is None:
+        return {}, None
+    n_weeks = max(1, (this_monday - first).days // 7)
+    avg = {t.team_id: round(sum(per.get(t.team_id, {}).values()) / n_weeks, 2) for t in league.teams}
+    return avg, round(sum(avg.values()) / len(avg), 2) if avg else None
+
+
+def protect_weight(league, opp, today):
+    """How much Streaming guards against the opponent's best streaming: the base weight scaled by how much he streams
+    compared with the league (0 for someone who never adds), capped at twice the base."""
+    try:
+        avg, league_avg = streaming_habits(league, today)
+    except Exception:
+        logging.exception("Couldn't read streaming habits")
+        return streaming.PROTECT_WEIGHT, None
+    if not league_avg or opp.team_id not in avg:
+        return streaming.PROTECT_WEIGHT, None
+    w = min(2 * streaming.PROTECT_WEIGHT, streaming.PROTECT_WEIGHT * avg[opp.team_id] / league_avg)
+    return round(w, 2), {"his": avg[opp.team_id], "league": league_avg, "weight": round(w, 2)}
+
+
+# ---- calibration: are the category win chances honest? Replayed on the league's finished weeks ----
+_calib = {"state": None, "report": None, "error": None}
+
+
+def calibration_report(league, today):
+    """Every matchup of every finished week, replayed from the morning of each day: totals so far (ESPN's daily lineups)
+    + projections for the rest of the week (each starter's games before that morning, his team's real schedule), turned
+    into category win chances by the site's odds model, against the category's final result. Returns reliability tables
+    and, per category, the variance scale that would have predicted best (log loss)."""
+    from math import log
+    games_on = {(team, datetime.fromtimestamp(g["date"] / 1000).date())
+                for team, periods in (getattr(league, "pro_schedule", None) or {}).items() for gs in periods.values() for g in gs}
+    rows = []  # (cat, my_total, their_total, my_rem, their_rem, outcome, variant totals for % cats)
+    for w in range(1, league.currentMatchupPeriod):
+        first, last = week_dates(league, w, today)
+        if last >= today:
+            continue
+        board = league.scoreboard(w)
+        teams = {t.team_id for m in board for t in (m.home_team, m.away_team) if hasattr(t, "team_id")}
+        lineups, rosters = day_lineups(league, first, last, today, teams, w)
+        pro = {pid: e.get("playerPoolEntry", {}).get("player", {}).get("proTeamId")
+               for d in rosters for t in rosters[d].values() for pid, e in t.items()}
+        pids = {pid for d in lineups for t in lineups[d].values() for pid in t}
+        logs = game_logs([types_ns(playerId=pid) for pid in pids])
+        for m in board:
+            a, b = m.home_team, m.away_team
+            if not (hasattr(a, "team_id") and hasattr(b, "team_id")) or not m.home_team_cats:
+                continue
+            final = {c: v.get("result") for c, v in m.home_team_cats.items()}
+            for k in range(7):
+                cut = first + timedelta(days=k)
+                if cut > last:
+                    break
+                side = {}
+                for t in (a, b):
+                    so_far = total([st for d in lineups if d < cut for st in (lineups[d].get(t.team_id) or {}).values() if st])
+                    rem_lines = []
+                    for d in (x for x in lineups if x >= cut):
+                        for pid in lineups[d].get(t.team_id) or {}:
+                            if (pro.get(pid), d) in games_on:
+                                before = [g for g in logs.get(pid, []) if g["date"] < cut.isoformat()]
+                                if before:
+                                    rem_lines.append(backtest.site(before))
+                    side[t.team_id] = (so_far, total(rem_lines))
+                (sa, ra), (sb, rb) = side[a.team_id], side[b.team_id]
+                for c in streaming.CATS:
+                    res = final.get(c)
+                    if res not in ("WIN", "LOSS", "TIE"):
+                        continue
+                    y = 1.0 if res == "WIN" else 0.0 if res == "LOSS" else 0.5
+                    rows.append((c, k, sa, ra, sb, rb, y))
+    if not rows:
+        return {"rows": 0}
+
+    def prob(c, k, sa, ra, sb, rb, scale, pct_mode):
+        if c in ("FG%", "FT%"):
+            m, at = ("FGM", "FGA") if c == "FG%" else ("FTM", "FTA")
+            full = pct_mode == "full"
+            pa = (sa[m] + ra[m]) / (sa[at] + ra[at]) if full and sa[at] + ra[at] else (ra[m] / ra[at] if ra[at] else 0)
+            pb = (sb[m] + rb[m]) / (sb[at] + rb[at]) if full and sb[at] + rb[at] else (rb[m] / rb[at] if rb[at] else 0)
+            # chance a team's % over the whole week moves: only the remaining attempts are uncertain
+            na = (sa[at] + ra[at]) ** 2 / ra[at] if full and ra[at] else ra[at]
+            nb = (sb[at] + rb[at]) ** 2 / rb[at] if full and rb[at] else rb[at]
+            v = scale * sum(p * (1 - p) / n for p, n in ((pa, na), (pb, nb)) if n)
+            diff = pa - pb
+        else:
+            diff = (sa[c] + ra[c]) - (sb[c] + rb[c])
+            if c == "TO":
+                diff = -diff
+            v = scale * streaming.SPREAD[c] * (ra[c] + rb[c])
+        from statistics import NormalDist
+        return NormalDist().cdf(diff / v ** 0.5) if v > 0 else 1.0 if diff > 1e-9 else 0.0 if diff < -1e-9 else 0.5
+
+    def loss(ps):  # mean log loss and Brier score
+        eps = 1e-6
+        ll = -sum(y * log(min(max(p, eps), 1 - eps)) + (1 - y) * log(min(max(1 - p, eps), 1 - eps)) for p, y in ps) / len(ps)
+        return round(ll, 4), round(sum((p - y) ** 2 for p, y in ps) / len(ps), 4)
+
+    scales = [0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0]
+    out = {"rows": len(rows), "weeks": sorted({w for w in range(1, league.currentMatchupPeriod)}), "cats": {}}
+    for c in streaming.CATS:
+        rc = [r for r in rows if r[0] == c]
+        modes = ["site", "full"] if c in ("FG%", "FT%") else ["site"]
+        res = {}
+        for mode in modes:
+            now = [(prob(*r[:6], 1.0, mode), r[6]) for r in rc]
+            fits = {sc: loss([(prob(*r[:6], sc, mode), r[6]) for r in rc]) for sc in scales}
+            best = min(fits, key=lambda sc: fits[sc][0])
+            bins = []
+            for lo in range(0, 100, 10):
+                inb = [(p, y) for p, y in now if lo / 100 <= p < (lo + 10) / 100 or (lo == 90 and p == 1)]
+                if inb:
+                    bins.append({"bin": f"{lo}-{lo + 10}%", "n": len(inb), "said": round(sum(p for p, _ in inb) / len(inb), 3),
+                                 "happened": round(sum(y for _, y in inb) / len(inb), 3)})
+            res[mode] = {"n": len(rc), "now": loss(now), "best_scale": best, "best": fits[best], "bins": bins}
+        out["cats"][c] = res
+    # how calibration changes through the week (day 0 = Monday morning, all projected)
+    out["by_day"] = {k: loss([(prob(*r[:6], 1.0, "site"), r[6]) for r in rows if r[1] == k]) for k in range(7)}
+    return out
+
+
+def types_ns(**kw):
+    from types import SimpleNamespace
+    return SimpleNamespace(**kw)
+
+
+def run_calibration():
+    try:
+        league, _ = connect()
+        _calib["report"] = calibration_report(league, datetime.now().date())
+        _calib["state"], _calib["error"] = "done", None
+    except Exception as e:
+        logging.exception("Calibration failed")
+        _calib["state"], _calib["error"] = "failed", str(e)
+
+
+@app.get("/api/calibrate")
+def calibrate(run: bool = False):
+    """Replay the league's finished weeks to check the category win chances. Runs in the background (a few minutes);
+    call with run=true to start, then again to read the report."""
+    if run and _calib["state"] != "running":
+        _calib["state"] = "running"
+        threading.Thread(target=run_calibration, daemon=True).start()
+    return {"state": _calib["state"], "error": _calib["error"], "report": _calib["report"]}
 
 
 # ---- Track record: how the site's advice and your moves turned out, rebuilt from ESPN (nothing is stored) ----
@@ -1008,15 +1192,7 @@ def pickup_record(league, me, today):
     from the add day until you dropped him (or yesterday) vs the dropped player's games over the same days (wherever he
     played). Per category: the net difference; overall: the net in 9-category value (each category's difference over how
     much that stat varies between players, summed; TO counts negative)."""
-    # ESPN returns the activity feed a slice at a time; page back through it (shortcut: at most 10 pages of 100 messages)
-    feed, seen = [], set()
-    for offset in range(0, 1000, 100):
-        page = league.recent_activity(size=100, offset=offset)
-        new = [a for a in page if (a.date, repr(a)) not in seen]
-        if not new:
-            break
-        seen.update((a.date, repr(a)) for a in new)
-        feed += new
+    feed = league_feed(league)
     moves, dropped_on = [], {}  # dropped_on: player name -> dates you dropped him
     for a in feed:
         acts = [(action, player) for team, action, player, *_ in a.actions if getattr(team, "team_id", None) == me.team_id]
