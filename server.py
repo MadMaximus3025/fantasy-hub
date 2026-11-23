@@ -736,6 +736,21 @@ def free_agents(league, size=60):
     return players
 
 
+def lineup_slots(league):
+    """The league's starting slots as ESPN names them (e.g. PG, SG, G, F, C, UT x3), from its roster settings;
+    None if ESPN doesn't say (the planner then just counts filled spots). Read once per league object."""
+    if not hasattr(league, "_lineup_slots"):
+        try:
+            counts = league.espn_request.league_get(params={"view": "mSettings"})["settings"]["rosterSettings"]["lineupSlotCounts"]
+            slots = [POSITION_MAP[int(k)] for k, n in counts.items() for _ in range(int(n))
+                     if POSITION_MAP.get(int(k)) not in (None, "", "BE", "IR")]
+            league._lineup_slots = slots or None
+        except Exception:
+            logging.exception("Couldn't read the league's lineup slots")
+            league._lineup_slots = None
+    return league._lineup_slots
+
+
 def acquisitions_left(league, me, first, last, week):
     """Weekly add limit, adds used this matchup and adds left, plus what they were read from so the page can show it.
     Used = your free-agent and waiver adds dated inside the matchup, from ESPN's league activity log."""
@@ -810,6 +825,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         ahead = sorted((g for g in p.schedule.values() if today <= g["date"].date() <= next_last), key=lambda g: g["date"])
         return {"id": p.playerId, "name": name or p.name, "note": p.proj_why, "per_game": proj_avg(p),
                 "season": season, "factor": p.proj_factor, "basis": p.proj_basis, "recent": p.recent,
+                "elig": [x for x in p.eligibleSlots if x not in ("BE", "IR")],  # lineup slots he can fill
                 "upcoming": [{"date": g["date"].date().isoformat(), "opp": g["team"]} for g in ahead],
                 "games" if team_id else "lines": lines}
 
@@ -832,6 +848,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         droppable=droppable,
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
         opp_rem=streaming.remaining(opp_players),
+        lineup=lineup_slots(league),
     )
     out["plan"]["opp_current"] = scores(opp_cats)
     out["plan"]["opp_players"] = streaming.rows(opp_players)

@@ -739,7 +739,7 @@ function planCard(s) {
     const left = Object.fromEntries(CATS9.map(c => [c, lineVal(a, c)])), right = Object.fromEntries(CATS9.map(c => [c, lineVal(b, c)]));
     const res = Object.fromEntries(CATS9.map(c => [c, cmpCat(c, left[c], right[c])]));
     return `<li class="move"><div class="meta-line"><span class="kind ${m.kind}">${m.kind === "upgrade" ? "Upgrade" : "Stream"}</span> ${gameDay(m.day)} ·
-        ${m.games.length ? `counts ${m.games.length} game${m.games.length === 1 ? "" : "s"} this week (${m.games.map(gameDay).join(", ")})` : "no games left this week"} · ${m.next_games} next week</div>
+        ${m.games.length ? `counts ${m.games.length} game${m.games.length === 1 ? "" : "s"} this week (${m.games.map(gameDay).join(", ")})` : "no games left this week"}${(m.benched || []).length ? ` · not counted: ${m.benched.map(gameDay).join(", ")} (no open slot for his positions)` : ""} · ${m.next_games} next week</div>
       <div class="rd-wrap">${radar(left, right, m.add.name, m.drop.name)}
         <div class="rd-legend"><div class="rd-head"><span>Projected per game</span><span>9-cat value</span></div>
           ${[[m.add, "a", "Add", m.games.length, 1], [m.drop, "b", "Drop", m.drop_week, -1]].map(([x, k, verb, n, sign]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>

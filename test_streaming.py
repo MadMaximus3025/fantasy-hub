@@ -94,6 +94,20 @@ assert [x["kind"] for x in up2["moves"]] == ["upgrade"], up2["moves"]  # everyth
 pr = st.odds({**close, "PTS": 400}, close, {"PTS": 20}, {"PTS": 20})
 assert pr["PTS"] > 0.99 and abs(pr["REB"] - 0.5) < 1e-9 and abs(st.win_chance({c: 0.5 for c in st.CATS}) - 0.5) < 1e-9, pr
 
+# positions: a pickup's game only counts on a day he fits next to that day's starters
+assert st.fits([["PG", "G", "UT"], ["C", "UT"]], ["PG", "C"]) and not st.fits([["C", "UT"], ["C"]], ["PG", "C"])
+assert st.fits([["PG", "UT"], ["PG", "UT"]], ["PG", "UT"])  # needs moving the first guard to UT: augmenting path
+LU = ["PG", "C"]
+guard = {"id": 21, "name": "Guard", "lines": {D[1]: big, D[2]: big}, "elig": ["PG", "G", "UT"]}
+center = {"id": 22, "name": "Center", "lines": {D[1]: big, D[2]: big}, "elig": ["C", "F", "UT"]}
+pg_start = [{"id": 1, "name": "Our PG", "games": {D[1]: big}, "elig": ["PG", "G", "UT"]}, {"id": 2, "name": "Scrub", "games": {}}]
+pos = st.plan(D, 2, pg_start, opp, cur, [guard], droppable={2}, acquisitions=1, lineup=LU)
+assert pos["moves"][0]["games"] == [D[2]] and pos["moves"][0]["benched"] == [D[1]], pos["moves"]  # Fri: only C is open
+assert st.plan(D, 2, pg_start, opp, cur, [center], droppable={2}, acquisitions=1, lineup=LU)["moves"][0]["games"] == [D[1], D[2]]
+# categories still come first: the guard who fits one day isn't picked over a center who fits both
+both = st.plan(D, 2, pg_start, opp, cur, [guard, center], droppable={2}, acquisitions=1, lineup=LU)
+assert both["moves"][0]["add"]["name"] == "Center", both["moves"]
+
 # player values: better per-game lines score higher; efficient shooting counts; turnovers hurt
 lines = {1: line(PTS=25, REB=8, AST=6, STL=1, BLK=1, **{"3PM": 3}, TO=2, FGM=9, FGA=17, FTM=4, FTA=5),
          2: line(PTS=8, REB=3, AST=1, TO=1, FGM=3, FGA=9, FTM=1, FTA=2),
