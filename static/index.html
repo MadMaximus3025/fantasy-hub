@@ -278,6 +278,8 @@
   .lineup tr.lu-idle > * { opacity:.55; }
   .lineup .lu-slot { font-weight:800; text-align:left; }
   .lineup .switch { min-width:4.5em; }
+  .todo { margin:0; padding-left:1.25rem; display:grid; gap:var(--sp-3); font-size:var(--fs-md); }
+  .todo ul { margin:var(--sp-1) 0 0; padding-left:1rem; }
   .lu-actions { display:flex; gap:var(--sp-2); flex-wrap:wrap; margin:var(--sp-2) 0; }
   .lu-totals td, .lu-totals th { white-space:nowrap; }
   .lineup tbody th { white-space:nowrap; color:var(--text); font-weight:800; }
@@ -326,7 +328,7 @@
   .error { color:var(--loss); padding:var(--sp-4); }
   /* phones: the page links fold into a ☰ menu that opens as a stacked list under the header */
   .menu-toggle { display:none; }
-  @media (max-width: 900px) {
+  @media (max-width: 960px) {
     header { position:relative; flex-wrap:nowrap; align-items:flex-start; }
     .menu-toggle { display:inline-flex; justify-content:center; width:44px; height:44px; padding:0; background:transparent; color:var(--text); border:2px solid var(--text); }
     .menu-toggle svg { width:20px; height:20px; }
@@ -355,7 +357,7 @@
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
     <button class="menu-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="pages"><svg class="i-open" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><svg class="i-close" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
+    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#today">Today</a><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Weekly planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#accuracy">Accuracy</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -634,7 +636,7 @@ try { drops = new Set(JSON.parse(localStorage.getItem("drops") || "[]")); } catc
 
 // redraw the streaming page, keeping keyboard focus on the switch that was focused
 function redrawStream() {
-  if (location.hash !== "#streaming" || !lastData) return;
+  if (!["#streaming", "#today"].includes(location.hash) || !lastData) return;
   const keep = document.activeElement?.dataset?.drop;
   render(lastData);
   if (keep) document.querySelector(`[data-drop="${keep}"]`)?.focus();
@@ -924,6 +926,50 @@ function rosterGuideCard(d) {
 
 const CATS9 = ["PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FG%", "FT%"];
 
+
+// ---- Today page (#today): the morning to-do list: matchup, lineup changes, pickups, injuries ----
+function todayView(d) {
+  const days = weekDays(d), today = d.week.today, rows = d.planner.mine;
+  const ti = days.findIndex(x => isoDay(x) === today);
+  const nextGame = days.findIndex((x, k) => isoDay(x) >= today && rows.some(r => r.opps[k] && !["off", "out"].includes(r.days[k])));
+  const i = ti >= 0 && rows.some(r => r.opps[ti] && !["off", "out"].includes(r.days[ti])) ? ti : nextGame;
+  const items = [];
+  // 1. the matchup
+  if (d.projection) {
+    const sm = matchupSummary(d);
+    items.push(`<li><b>Matchup vs ${esc(d.opponent)}:</b> ${sm.text} · ${Math.round(sm.o.win * 100)}% to win.
+      ${sm.o.swing.length ? `Still in play: <b>${sm.o.swing.join(", ")}</b>.` : "No category is a toss-up."}</li>`);
+  }
+  // 2. lineup changes for today (or the next day with games)
+  if (i >= 0) {
+    const L = lineupBase(d, i), when = i === ti ? "today" : gameDay(L.day);
+    const names = xs => xs.map(r => esc(r.name)).join(", ");
+    const fixes = [];
+    if (L.outInLineup.length) fixes.push(`${names(L.outInLineup)} ${L.outInLineup.length === 1 ? "is" : "are"} OUT but in a starting slot: bench ${L.outInLineup.length === 1 ? "him" : "them"}`);
+    if (L.ins.length || L.outs.length) fixes.push(`start ${names(L.ins) || "—"}; sit ${names(L.outs) || "—"}`);
+    items.push(`<li><b>Lineup ${when}:</b> ${fixes.length ? fixes.join(". ") + `. <a href="#lineup" data-lday-go="${L.day}">Open lineup</a>` : "set right, nothing to change."}</li>`);
+  } else items.push(`<li><b>Lineup:</b> none of your players has a game left this week.</li>`);
+  // 3. pickups to make today (streams and IR moves), from the Streaming plan with your Droppable choices
+  const sp = stream.plan, sd = stream.data;
+  if (!sp && !stream.error) {
+    if (!stream.loading) loadStream(true);
+    items.push(`<li><b>Pickups:</b> <span class="muted">checking free agents…</span></li>`);
+  } else if (stream.error) items.push(`<li><b>Pickups:</b> <span class="error">couldn't check: ${esc(stream.error)}</span></li>`);
+  else {
+    const todays = (sp?.moves || []).filter(m => m.day === today);
+    const later = (sp?.moves || []).filter(m => m.day > today);
+    const say = m => `${m.ir ? `move ${esc(m.drop.name)} to IR` : `drop ${esc(m.drop.name)}`}, add <b>${esc(m.add.name)}</b> (${m.games.length} game${m.games.length === 1 ? "" : "s"} this week${m.win ? `, win ${Math.round(m.win[0] * 100)}% → ${Math.round(m.win[1] * 100)}%` : ""})`;
+    items.push(`<li><b>Pickups today:</b> ${todays.length ? todays.map(say).join("; ") + " — before tip-off." : sp ? "none needed." : "mark who can go on Streaming to get suggestions."}
+      ${later.length ? `<br><span class="muted">Later this week: ${later.map(m => `${gameDay(m.day)}: ${say(m)}`).join("; ")}.</span>` : ""} <a href="#streaming">Streaming</a></li>`);
+  }
+  // 4. health: injured players with a game today or still in the plans, with their latest injury news
+  const news = Object.fromEntries((d.roster || []).map(p => [p.id, (p.news || []).find(n => n.kind === "Injury")]));
+  const hurt = rows.filter(r => r.injury && (i < 0 || r.opps[i]));
+  items.push(`<li><b>Health:</b> ${hurt.length ? `<ul>${hurt.map(r => `<li>${esc(r.name)} <span class="inj">${esc(r.injury.replace("_", " "))}</span>${news[r.id] ? ` · ${esc(news[r.id].headline)}` : ""}</li>`).join("")}</ul>` : "no injured players with a game."}</li>`);
+  return `<section class="card wide today"><h2>Today · ${gameDay(today)}</h2><ol class="todo">${items.join("")}</ol>
+    <p class="muted">Your morning list: everything here comes from the other pages (Dashboard odds, Lineup suggestion, Streaming plan), so it always agrees with them.</p></section>`;
+}
+
 // ---- Daily lineup page (#lineup): one day's players with a game, who ESPN starts, and who to start ----
 const lineup = { day: null, choice: {} };  // ISO date picked (null = today or the next day with games); starters chosen per day
 
@@ -939,46 +985,71 @@ function fitsLineup(players, slots) {
   return players.length <= slots.length && players.every((_, i) => place(i, new Set()));
 }
 
-function lineupView(d) {
-  const days = weekDays(d), iso = x => x.toLocaleDateString("en-CA");
-  const rows = d.planner.mine, today = d.week.today;
-  const hasGame = (r, k) => !!r.opps[k] && r.days[k] !== "off";
-  const avail = (r, k) => hasGame(r, k) && r.days[k] !== "out";
-  let i = days.findIndex(x => iso(x) === lineup.day);
-  if (i < 0) i = Math.max(0, days.findIndex((x, k) => iso(x) >= today && rows.some(r => avail(r, k))));
-  const day = iso(days[i]), past = day < today;
+const isoDay = x => x.toLocaleDateString("en-CA");
+
+// Everything both the Lineup and Today pages need for day index i: who's on the team, ESPN's lineup, each player's
+// matchup value and the suggested lineup. Matchup value = categories you're expected to win this week with him starting
+// that day minus without him (dashboard odds), so close categories count and locked ones don't; the 9-cat value breaks ties.
+function lineupBase(d, i) {
+  const days = weekDays(d), rows = d.planner.mine, today = d.week.today;
+  const day = isoDay(days[i]), past = day < today;
+  const hasGame = r => !!r.opps[i] && r.days[i] !== "off";
+  const avail = r => hasGame(r) && r.days[i] !== "out";
   const slotOf = r => (r.dslots ? r.dslots[i] : r.slot);
   const onTeam = rows.filter(r => slotOf(r));
   const slots = d.lineup || null;
   const spots = slots ? slots.length : onTeam.filter(r => !["BE", "IR"].includes(slotOf(r))).length;
   const espnOn = r => !["BE", "IR"].includes(slotOf(r));  // in ESPN's starting lineup that day
-  // suggestion: the highest projected value that fits the slots (greedy over a slot matching is optimal)
+  const counted = r => espnOn(r) && avail(r) && !past;     // what the week projection counts for that day
+  const mv = {};
+  if (d.projection && !past) {
+    const base = Object.fromEntries(KEYS.map(k => [k, 0]));  // the week without anyone's game that day
+    for (const r of onTeam) if (counted(r)) for (const k of KEYS) base[k] -= r.avg[k] || 0;
+    const e0 = matchupOdds(d, base).expected;
+    for (const r of onTeam.filter(avail)) mv[r.id] = matchupOdds(d, Object.fromEntries(KEYS.map(k => [k, base[k] + (r.avg[k] || 0)]))).expected - e0;
+  }
+  const score = r => [mv[r.id] ?? 0, r.value ?? 0];
+  const better = (a, b) => { const [x, y] = [score(a), score(b)]; return y[0] - x[0] || y[1] - x[1]; };
+  // best lineup that fits the slots: greedy by matchup value over a slot matching
   const pick = [];
-  for (const r of onTeam.filter(r => avail(r, i)).sort((a, b) => (b.value ?? 0) - (a.value ?? 0))) {
+  for (const r of onTeam.filter(avail).sort(better)) {
     if (pick.length >= spots) break;
     if (!slots || fitsLineup([...pick, r].map(x => x.elig || []), slots)) pick.push(r);
   }
   const suggested = new Set(pick.map(r => r.id));
+  const ins = onTeam.filter(r => avail(r) && suggested.has(r.id) && !espnOn(r));
+  const outs = onTeam.filter(r => avail(r) && !suggested.has(r.id) && espnOn(r));
+  const outInLineup = onTeam.filter(r => espnOn(r) && hasGame(r) && r.days[i] === "out");  // OUT but in a starting slot
+  return { day, past, hasGame, avail, slotOf, onTeam, slots, spots, espnOn, mv, suggested, ins, outs, outInLineup, better };
+}
+
+function lineupView(d) {
+  const days = weekDays(d), iso = isoDay, rows = d.planner.mine, today = d.week.today;
+  const anyGame = k => rows.some(r => r.opps[k] && !["off", "out"].includes(r.days[k]));
+  let i = days.findIndex(x => iso(x) === lineup.day);
+  if (i < 0) i = Math.max(0, days.findIndex((x, k) => iso(x) >= today && anyGame(k)));
+  const { day, past, hasGame: g1, avail: a1, slotOf, onTeam, slots, spots, espnOn, mv, suggested, better } = lineupBase(d, i);
+  const hasGame = r => g1(r), avail = r => a1(r);
   // your choices for this day: {player id: starts?} on top of ESPN's lineup
   const ov = lineup.choice[day] || {};
   const starts = r => ov[r.id] ?? espnOn(r);
-  const sugOv = Object.fromEntries(onTeam.filter(r => avail(r, i)).map(r => [r.id, suggested.has(r.id)]));
+  const sugOv = Object.fromEntries(onTeam.filter(r => avail(r)).map(r => [r.id, suggested.has(r.id)]));
   // what your choices change this week: started games that count now minus ones ESPN's lineup counted
-  const counts = (r, on) => on && avail(r, i) && !past;
+  const counts = (r, on) => on && avail(r) && !past;
   const extra = Object.fromEntries(KEYS.map(k => [k, 0]));
   for (const r of onTeam) {
     const delta = (counts(r, starts(r)) ? 1 : 0) - (counts(r, espnOn(r)) ? 1 : 0);
     if (delta) for (const k of KEYS) extra[k] += delta * (r.avg[k] || 0);
   }
-  const playingNow = onTeam.filter(r => starts(r) && avail(r, i));
+  const playingNow = onTeam.filter(r => starts(r) && avail(r));
   const valid = !slots || fitsLineup(playingNow.map(r => r.elig || []), slots);
   const changed = onTeam.some(r => starts(r) !== espnOn(r));
   const cols = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"];
   const order = ["PG", "SG", "SF", "PF", "C", "G", "F", "SG/SF", "G/F", "PF/C", "F/C", "UT", "BE", "IR"];  // ESPN's slot order
   const rank = r => { const k = order.indexOf(slotOf(r)); return k < 0 ? order.length - 2 : k; };
   const slotName = x => ({ UT: "UTIL", BE: "Bench" })[x] || x;
-  const body = [...onTeam].sort((a, b) => rank(a) - rank(b) || (b.value ?? 0) - (a.value ?? 0)).map(r => {
-    const g = hasGame(r, i), out = r.days[i] === "out";
+  const body = [...onTeam].sort((a, b) => rank(a) - rank(b) || better(a, b)).map(r => {
+    const g = hasGame(r), out = r.days[i] === "out";
     const toggle = !g ? `<span class="muted">No game</span>` : out ? `<span class="inj">OUT</span>` : past ? `<span class="muted">${espnOn(r) ? "Started" : "Bench"}</span>`
       : `<button class="switch" role="switch" data-lstart="${r.id}" aria-checked="${starts(r)}" aria-label="${esc(r.name)} starts">${starts(r) ? "Start" : "Sit"}</button>`;
     const sug = g && !out ? (suggested.has(r.id) ? "Start" : "Sit") : "";
@@ -988,10 +1059,11 @@ function lineupView(d) {
         <small>${esc(r.team)} · ${esc((r.elig || []).filter(x => ["PG", "SG", "SF", "PF", "C"].includes(x)).join(", "))}</small></th>
       <td>${g ? esc(r.opps[i]) : "—"}</td><td>${toggle}</td><td class="${sug === "Start" ? "pos" : "neg"}">${sug}</td>
       ${g ? cols.map(c => `<td>${perGame(c, r.avg[c] || 0)}</td>`).join("") + `<td>${perGame("FG%", lineVal(r.avg, "FG%"))}</td><td>${perGame("FT%", lineVal(r.avg, "FT%"))}</td>
-        <td class="${(r.value ?? 0) >= 0 ? "pos" : "neg"}">${(r.value ?? 0) >= 0 ? "+" : ""}${(r.value ?? 0).toFixed(1)}</td>` : `<td colspan="10"></td>`}</tr>`;
+        <td>${mv[r.id] != null ? `+${mv[r.id].toFixed(2)}` : "—"}</td>
+        <td class="${(r.value ?? 0) >= 0 ? "pos" : "neg"}">${(r.value ?? 0) >= 0 ? "+" : ""}${(r.value ?? 0).toFixed(1)}</td>` : `<td colspan="11"></td>`}</tr>`;
   }).join("");
-  const chips = days.map((x, k) => `<button class="chip day" data-lday="${iso(x)}" aria-pressed="${k === i}">${x.toLocaleDateString(undefined, { weekday: "short" })} ${rows.filter(r => avail(r, k)).length}</button>`).join("");
-  const nAvail = onTeam.filter(r => avail(r, i)).length;
+  const chips = days.map((x, k) => `<button class="chip day" data-lday="${iso(x)}" aria-pressed="${k === i}">${x.toLocaleDateString(undefined, { weekday: "short" })} ${rows.filter(r => r.opps[k] && !["off", "out"].includes(r.days[k])).length}</button>`).join("");
+  const nAvail = onTeam.filter(r => avail(r)).length;
   return `${d.projection ? lineupTotals(d, extra, changed, day) : ""}
   <section class="card wide"><div class="slate-head"><h2>Lineup · ${gameDay(day)}</h2>
       <span class="muted">${nAvail} with a game for ${spots} spots</span></div>
@@ -1001,11 +1073,12 @@ function lineupView(d) {
     ${playingNow.length > spots ? `<p class="error">${playingNow.length} starters with a game for ${spots} spots.</p>` : ""}
     <div class="lu-actions"><button class="ghost" data-lset="suggest" data-ov='${JSON.stringify(sugOv)}'>Use suggested lineup</button><button class="ghost" data-lset="espn">Reset to ESPN</button></div>
     <div class="h2h-scroll"><table class="guide lineup"><thead><tr><th scope="col">Slot</th><th scope="col">Player</th><th scope="col">Opp</th><th scope="col">Start / Sit</th><th scope="col">Suggest</th>
-      ${cols.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">FG%</th><th scope="col">FT%</th><th scope="col">Value</th></tr></thead>
+      ${cols.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">FG%</th><th scope="col">FT%</th><th scope="col">Matchup</th><th scope="col">Value</th></tr></thead>
       <tbody>${body}</tbody></table></div>
     <p class="muted">Slot = where ESPN has him for this day. Start / Sit begins as ESPN's lineup; flip players to try a lineup (the site can't change ESPN, so set it there).
-      Projected stats are per game. Suggest = the lineup with the highest total value (9-category impact per game; 0 = average player on the two rosters)
-      that fits your slots. Highlighted rows differ from ESPN.${past ? " This day is over: its lineup can't change." : ""}</p></section>`;
+      Projected stats are per game. Matchup = categories you're expected to win this week that his game that day adds
+      (close categories count, decided ones don't). Suggest = the lineup with the most matchup value that fits your slots; Value
+      (9-category impact per game, 0 = average) breaks ties. Highlighted rows differ from ESPN.${past ? " This day is over: its lineup can't change." : ""}</p></section>`;
 }
 
 // Category totals this week with ESPN's lineup vs with your start/sit choices for the day picked
@@ -1115,16 +1188,18 @@ let lastData = null;
 
 function render(d) {
   lastData = d;
-  const page = ["#planner", "#lineup", "#streaming", "#accuracy"].includes(location.hash) ? location.hash : "#";
+  const page = ["#today", "#planner", "#lineup", "#streaming", "#accuracy"].includes(location.hash) ? location.hash : "#";
   $("#app").classList.toggle("planner", page !== "#");
   document.querySelectorAll(".nav-row a").forEach(a => a.getAttribute("href") === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
-  $("#app").innerHTML = page === "#planner" ? plannerView(d) : page === "#lineup" ? lineupView(d) : page === "#streaming" ? streamView() : page === "#accuracy" ? accuracyView()
+  $("#app").innerHTML = page === "#today" ? todayView(d) : page === "#planner" ? plannerView(d) : page === "#lineup" ? lineupView(d) : page === "#streaming" ? streamView() : page === "#accuracy" ? accuracyView()
     : matchupCard(d) + rosterCard(d);
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });
 $("#app").addEventListener("click", e => {  // lineup page: pick a day, flip start/sit, or reset
   const day = e.target.closest("[data-lday]"), flip = e.target.closest("[data-lstart]"), set = e.target.closest("[data-lset]");
   if (day) { lineup.day = day.dataset.lday; return render(lastData); }
+  const go = e.target.closest("[data-lday-go]");
+  if (go) lineup.day = go.dataset.ldayGo;  // Today -> Lineup opens on the day it talked about
   if (!flip && !set) return;
   const cur = $("#app [data-lday][aria-pressed='true']")?.dataset.lday;
   if (!cur) return;
