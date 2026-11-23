@@ -19,7 +19,10 @@ STREAM_TOLERANCE = 4.0  # ...and may cost at most this much two-week value (abou
 UPGRADE_MIN = 2.0       # an upgrade for next week must add at least this much two-week value
 LOCKED_COST = 0.02      # ...and may cost this week at most this many expected categories (locked ones only)
 PROTECT_WEIGHT = 0.3    # with the opponent's worst case: 70% "he stands pat", 30% "he streams as well as he can"
-SPREAD = {"PTS": 2, "REB": 1.5, "AST": 1.5, "STL": 1.2, "BLK": 1.5, "3PM": 1.3, "TO": 1.2}  # same as the dashboard
+# Calibrated on the league's finished weeks (GET /api/calibrate, Nov 2026: 1,575 replayed predictions): the
+# old values (PTS 2, REB 1.5, AST 1.5, STL 1.2, BLK 1.5, 3PM 1.3, TO 1.2) were 2-8x overconfident ("99%" won 85%).
+SPREAD = {"PTS": 10, "REB": 7.5, "AST": 12, "STL": 6, "BLK": 4.5, "3PM": 2.6, "TO": 6}  # same as the dashboard
+PCT_SCALE = {"FG%": 8.0, "FT%": 2.0}  # FG%/FT% swing x this, on whole-week makes/attempts (same calibration)
 
 
 def zscorer(lines):
@@ -54,16 +57,19 @@ def player_values(lines):
 
 
 def totals(current, players):
-    """Projected category totals: current matchup scores + every counted game line. FG%/FT% from remaining games."""
+    """Projected category totals: current matchup scores + every counted game line. FG%/FT% over the whole week when
+    `current` has this week's makes/attempts so far (FGM, FGA, FTM, FTA); from remaining games only otherwise.
+    "FGA"/"FTA" in the result are the whole week's attempts, for odds()."""
     t = {k: 0.0 for k in KEYS}
     for p in players:
         for line in p["games"].values():
             for k in KEYS:
                 t[k] += line.get(k, 0)
     out = {k: t[k] + current.get(k, 0) for k in COUNTING}
-    # same simplification as the dashboard projection: ESPN gives no makes/attempts so far this week
-    out["FG%"] = t["FGM"] / t["FGA"] if t["FGA"] else current.get("FG%", 0)
-    out["FT%"] = t["FTM"] / t["FTA"] if t["FTA"] else current.get("FT%", 0)
+    for c, m, a in (("FG%", "FGM", "FGA"), ("FT%", "FTM", "FTA")):
+        made, tries = t[m] + current.get(m, 0), t[a] + current.get(a, 0)
+        out[c] = made / tries if tries else current.get(c, 0)
+        out[a] = tries
     return out
 
 
@@ -83,7 +89,10 @@ def odds(mine, theirs, rem_mine, rem_theirs=None):
             diff = -diff
         if c.endswith("%"):
             k = "FGA" if c == "FG%" else "FTA"
-            v = sum(p * (1 - p) / n for p, n in ((mine[c], rem_mine.get(k, 0)), (theirs[c], rem_theirs.get(k, 0))) if n)
+            # only the attempts still to come move a whole-week %: its variance is p(1-p) x left / all^2
+            eff = lambda tot, left: (tot.get(k) or left) ** 2 / left if left else 0
+            v = PCT_SCALE[c] * sum(p * (1 - p) / n for p, n in ((mine[c], eff(mine, rem_mine.get(k, 0))),
+                                                                (theirs[c], eff(theirs, rem_theirs.get(k, 0)))) if n)
         else:
             v = SPREAD[c] * (rem_mine.get(c, 0) + rem_theirs.get(c, 0))
         prob[c] = NormalDist().cdf(diff / v ** 0.5) if v > 0 else 1.0 if diff > 1e-9 else 0.0 if diff < -1e-9 else 0.5
