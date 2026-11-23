@@ -310,6 +310,17 @@ def scores(current_cats):
     return {k: (v or {}).get("score", 0) for k, v in (current_cats or {}).items()}
 
 
+def with_shooting(current_cats, lineups, today, team_id):
+    """Add this week's makes and attempts so far (FGM, FGA, FTM, FTA) to the matchup totals, summed from ESPN's daily
+    lineups (today's games included), so FG%/FT% can be projected over the whole week. ESPN's totals have only the %."""
+    if current_cats is None:
+        return current_cats
+    rows = [s for d, teams in (lineups or {}).items() if d <= today for s in ((teams.get(team_id) or {}).values()) if s]
+    if not rows:
+        return current_cats
+    return {**current_cats, **{k: {"score": sum(s.get(k, 0) or 0 for s in rows)} for k in ("FGM", "FGA", "FTM", "FTA")}}
+
+
 def with_live(current_cats, lineups, days, team_id):
     """ESPN's matchup totals cover finished scoring periods only; ESPN's live view also counts the period in progress.
     Add the starters' stats of `days` (live_days(): ESPN's current period up to today), games in progress included.
@@ -369,14 +380,15 @@ def contributions(roster, now, start, end, team_id=None, lineups=None):
 
 
 def project(roster, current_cats, now, start, end, team_id=None, lineups=None):
-    """Current matchup totals + the sum of contributions(). FG%/FT% use only remaining games."""
+    """Current matchup totals + the sum of contributions(). FG%/FT% over the whole week when the current totals carry
+    this week's makes/attempts (with_shooting); from remaining games only otherwise."""
     rows = contributions(roster, now, start, end, team_id, lineups)
     tot = {k: sum(r[k] for r in rows) for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}
     current = scores(current_cats)
     out = {k: round(tot[k] + current.get(k, 0), 1) for k in COUNTING}
-    # shortcut: ESPN only returns the current %, not makes/attempts, so % ignores games already played.
-    out["FG%"] = round(tot["FGM"] / tot["FGA"], 3) if tot["FGA"] else current.get("FG%", 0)
-    out["FT%"] = round(tot["FTM"] / tot["FTA"], 3) if tot["FTA"] else current.get("FT%", 0)
+    for c, m, a in (("FG%", "FGM", "FGA"), ("FT%", "FTM", "FTA")):
+        made, tries = tot[m] + current.get(m, 0), tot[a] + current.get(a, 0)
+        out[c] = round(made / tries, 3) if tries else current.get(c, 0)
     return out
 
 
@@ -624,8 +636,8 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
         fill_actuals(lineups, today)
     # match ESPN's live totals: finished days plus today's games, in progress included
     live = live_days(league, lineups, today)
-    my_cats = with_live(my_cats, lineups, live, me.team_id)
-    opp_cats = with_live(opp_cats, lineups, live, opp.team_id) if opp else opp_cats
+    my_cats = with_shooting(with_live(my_cats, lineups, live, me.team_id), lineups, today, me.team_id)
+    opp_cats = with_shooting(with_live(opp_cats, lineups, live, opp.team_id), lineups, today, opp.team_id) if opp else opp_cats
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
     data["planner"] = {"mine": planner_rows(me.roster, me.team_id, first, last, today, lineups, rosters),
                        "teams": team_games(league, first, last)}
@@ -813,8 +825,8 @@ def matchup_setup(league, me):
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
     lineups, rosters = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
     live = live_days(league, lineups, today)  # same live totals as the dashboard
-    my_cats = with_live(my_cats, lineups, live, me.team_id)
-    opp_cats = with_live(opp_cats, lineups, live, opp.team_id) if opp else opp_cats
+    my_cats = with_shooting(with_live(my_cats, lineups, live, me.team_id), lineups, today, me.team_id)
+    opp_cats = with_shooting(with_live(opp_cats, lineups, live, opp.team_id), lineups, today, opp.team_id) if opp else opp_cats
     for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
         pending_moves(team, rosters, today, league)
         league_order(team.roster, today)
@@ -1101,7 +1113,7 @@ def calibration_report(league, today):
             # chance a team's % over the whole week moves: only the remaining attempts are uncertain
             na = (sa[at] + ra[at]) ** 2 / ra[at] if full and ra[at] else ra[at]
             nb = (sb[at] + rb[at]) ** 2 / rb[at] if full and rb[at] else rb[at]
-            v = scale * sum(p * (1 - p) / n for p, n in ((pa, na), (pb, nb)) if n)
+            v = scale * (streaming.PCT_SCALE[c] if full else 1) * sum(p * (1 - p) / n for p, n in ((pa, na), (pb, nb)) if n)
             diff = pa - pb
         else:
             diff = (sa[c] + ra[c]) - (sb[c] + rb[c])

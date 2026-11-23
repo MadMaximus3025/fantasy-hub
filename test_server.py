@@ -679,4 +679,10 @@ assert rep["rows"] == 7 * 9 and set(rep["cats"]) == set(server.streaming.CATS), 
 assert rep["cats"]["PTS"]["site"]["now"][0] < 0.2 and set(rep["cats"]["FG%"]) == {"site", "full"}, rep["cats"]["PTS"]  # a 30-v-10 week: confident and right
 server.day_lineups, server.fetch_gamelog = real_dl, real_log
 
+# with_shooting: this week's makes/attempts so far from the daily lineups (days up to today), next to ESPN's totals
+sh = server.with_shooting({"FG%": {"score": 0.5}}, {MON: {1: {5: {"FGM": 4, "FGA": 8}, 6: None}}, TODAY: {1: {5: {"FGM": 1, "FGA": 2}}},
+                          TODAY + timedelta(days=1): {1: {5: {"FGM": 9, "FGA": 9}}}}, TODAY, 1)
+assert sh["FGM"]["score"] == 5 and sh["FGA"]["score"] == 10 and sh["FG%"]["score"] == 0.5, sh
+assert server.with_shooting(None, {}, TODAY, 1) is None
+
 print("ok")

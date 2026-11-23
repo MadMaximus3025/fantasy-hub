@@ -120,16 +120,23 @@ assert st.plan(D, 2, hurt, opp, cur, fa, droppable={7}, acquisitions=2)["moves"]
 base_l = line(PTS=15, REB=5, AST=3, STL=1, BLK=1, **{"3PM": 1}, TO=2, FGM=6, FGA=13, FTM=2, FTA=3)
 pme = [{"id": 1, "name": "Starter", "games": {D[0]: base_l}}, {"id": 2, "name": "Scrub", "games": {}}]
 pcur = {"PTS": 300, "REB": 120, "AST": 70, "STL": 20, "BLK": 10, "3PM": 40, "TO": 30, "FG%": .47, "FT%": .78}
-popp = {"PTS": 250, "REB": 128, "AST": 50, "STL": 15, "BLK": 8, "3PM": 32, "TO": 40, "FG%": .45, "FT%": .75}  # REB close, 3PM safe
+popp = {"PTS": 250, "REB": 126, "AST": 50, "STL": 15, "BLK": 8, "3PM": 32, "TO": 40, "FG%": .45, "FT%": .75}  # REB close, 3PM safe
 prem = {"PTS": 60, "REB": 25, "AST": 12, "STL": 4, "BLK": 3, "3PM": 6, "TO": 8, "FGM": 22, "FGA": 50, "FTM": 8, "FTA": 10}
-shooter = {"id": 10, "name": "Shooter", "lines": {d: line(PTS=12, REB=2, **{"3PM": 3}, TO=1, FGM=4, FGA=10, FTM=1, FTA=1) for d in D[1:]}}
-rebounder = {"id": 11, "name": "Rebounder", "lines": {d: line(PTS=8, REB=10, TO=1, FGM=4, FGA=7, FTA=1) for d in D[1:]}}
+shooter = {"id": 10, "name": "Shooter", "lines": {d: line(PTS=8, REB=2, **{"3PM": 3}, TO=1, FGM=3, FGA=8, FTM=1, FTA=1) for d in D[1:]}}
+rebounder = {"id": 11, "name": "Rebounder", "lines": {d: line(PTS=8, REB=14, TO=1, FGM=4, FGA=7, FTA=1) for d in D[1:]}}
 plain = st.plan(D, 2, pme, popp, pcur, [shooter, rebounder], droppable={2}, acquisitions=1, opp_rem=prem)
 guard = st.plan(D, 2, pme, popp, pcur, [shooter, rebounder], droppable={2}, acquisitions=1, opp_rem=prem,
                 opp_worst={"totals": dict(popp, **{"3PM": 47}), "rem": prem})  # his streaming would take 3PM
 assert plain["moves"][0]["add"]["name"] == "Rebounder" and plain["moves"][0]["protects"] == []
 assert guard["moves"][0]["add"]["name"] == "Shooter" and "3PM" in guard["moves"][0]["protects"], guard["moves"]
 assert guard["before"]["expected"] == plain["before"]["expected"]  # shown numbers stay on the plain odds, like every page
+
+# FG%/FT% over the whole week: makes/attempts so far + games left; only the attempts left can still move it
+wk = st.totals({"FGM": 40, "FGA": 100, "FG%": .4}, [{"games": {D[1]: line(FGM=10, FGA=20)}}])
+assert abs(wk["FG%"] - 50 / 120) < 1e-9 and wk["FGA"] == 120, wk
+early = st.odds({**wk, "FG%": .43}, {**wk, "FG%": .41}, {"FGA": 100}, {"FGA": 100})["FG%"]  # most attempts still to come
+late = st.odds({**wk, "FG%": .43}, {**wk, "FG%": .41}, {"FGA": 5}, {"FGA": 5})["FG%"]      # nearly all banked
+assert 0.5 < early < late < 1, (early, late)  # the same lead is safer once the attempts are in
 
 # player values: better per-game lines score higher; efficient shooting counts; turnovers hurt
 lines = {1: line(PTS=25, REB=8, AST=6, STL=1, BLK=1, **{"3PM": 3}, TO=2, FGM=9, FGA=17, FTM=4, FTA=5),
