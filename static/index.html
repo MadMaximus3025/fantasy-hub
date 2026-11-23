@@ -271,7 +271,9 @@
   .breakdown summary { cursor:pointer; font-weight:600; min-height:var(--tap); display:flex; align-items:center; }
   .breakdown h3 { margin:var(--sp-3) 0 var(--sp-1); font-size:var(--fs-sm); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
   .breakdown th, .breakdown td { white-space:nowrap; }
-  .breakdown tbody th { white-space:normal; min-width:12em; }  /* names carry news notes; let them wrap so the stat columns stay in view */
+  .breakdown tbody th { white-space:normal; min-width:12em; }
+  .ahead { list-style:none; margin:var(--sp-2) 0; padding:0; font-size:var(--fs-sm); color:var(--text-2); }
+  .ahead li { margin:2px 0; }  /* names carry news notes; let them wrap so the stat columns stay in view */
   .breakdown tr.sum td, .breakdown tr.sum th { font-weight:700; border-top:2px solid var(--line); }
   .h2h th, .h2h td { white-space:nowrap; }
   .h2h small, .breakdown small { display:block; color:var(--muted); font:var(--fs-xs) var(--font); }
@@ -555,9 +557,9 @@ function accuracyView() {
   }).join("");
   return `<section class="card wide"><h2>How the projections did · your roster · ${team.games} games</h2>
       <div class="tiles">${tiles}</div>
-      <p class="muted">Each game is projected the way the site projects (his season average; role news can't be replayed for past games), using only the player's earlier games this season, then compared with what he actually did.
+      <p class="muted">Each game is projected the way the site projects (his recent games: 60% season / 40% last 7 games per minute, times his minutes in his last 3 games; role news can't be replayed for past games), using only the player's earlier games this season, then compared with what he actually did.
         Green = beat the projection, red = fell short (TO: fewer is better). Counting stats in %, FG%/FT% in percentage points. A game counts once a player has ${history} earlier games.</p>
-      <p class="muted"><b>Why the site doesn't auto-correct from these misses:</b> we tested letting it adjust each player by his own track record (python backtest.py). It made projections slightly <i>less</i> accurate (0.667 vs 0.665), because it chases random hot and cold streaks. A player who keeps missing usually changed role, which the role-news adjustment picks up.</p></section>
+      <p class="muted"><b>Why the site doesn't auto-correct from these misses:</b> we tested letting it adjust each player by his own track record (python backtest.py). It made projections slightly <i>less</i> accurate (0.674 vs 0.666), because it chases random hot and cold streaks. A player who keeps missing usually changed role, which his recent minutes and role news pick up.</p></section>
     <section class="card wide guide"><h2>By player <small class="muted">click a name for his last 10 games</small></h2>
       <div class="h2h-scroll"><table><thead><tr><th scope="col">Player</th><th scope="col">Games</th>${CATS9.map(c => `<th scope="col">${c}</th>`).join("")}</tr></thead>
       <tbody>${rows}</tbody></table></div></section>`;
@@ -718,7 +720,7 @@ function moveWhy(m) {
     <li><b>Value</b>: ${sign(addV)} per game × ${m.add_games} = ${sign(+(addV * m.add_games).toFixed(1))}, minus ${sign(dropV)} × ${m.drop_games} = ${sign(+(dropV * m.drop_games).toFixed(1))}
       → <b class="${m.value >= 0 ? "pos" : "neg"}">${sign(m.value)}</b>. Per-game value = his 9-cat line compared with every player in the pool (0 = average).</li>
     <li><b>This week's matchup</b>: ${flips.length ? flips.join(" · ") : "no category changes hands"}${moved.length ? `; your projected totals: ${moved.join(" · ")}` : ""}.</li>
-    ${m.add.note ? `<li><b>Projection</b>: ${esc(m.add.note)} (×${m.add.factor.toFixed(2)}).</li>` : ""}
+    <li><b>Projection</b>: ${adjText(m.add)}.</li>
     <li><b>Why ${m.kind === "upgrade" ? "an upgrade" : "a stream"}</b>: ${m.kind === "upgrade"
       ? "adds at least +2 value over this week and next without losing a category this week."
       : "wins more categories this week while costing at most 4 value over the two weeks."}</li></ul></details>`;
@@ -737,12 +739,13 @@ function planCard(s) {
     return `<li class="move"><div class="meta-line"><span class="kind ${m.kind}">${m.kind === "upgrade" ? "Upgrade" : "Stream"}</span> ${gameDay(m.day)} ·
         ${m.games.length ? `counts ${m.games.length} game${m.games.length === 1 ? "" : "s"} this week (${m.games.map(gameDay).join(", ")})` : "no games left this week"} · ${m.next_games} next week</div>
       <div class="rd-wrap">${radar(left, right, m.add.name, m.drop.name)}
-        <div class="rd-legend"><div class="rd-head"><span>Season averages per game</span><span>9-cat value</span></div>
+        <div class="rd-legend"><div class="rd-head"><span>Projected per game</span><span>9-cat value</span></div>
           ${[[m.add, "a", "Add"], [m.drop, "b", "Drop"]].map(([x, k, verb]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
             <img class="pic sm" src="${headshot(x.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
             <span><b>${verb} ${esc(x.name)}</b><small>${adjText(x)}</small></span>
             <b class="${x.value >= 0 ? "pos" : "neg"}">${x.value >= 0 ? "+" : ""}${(x.value ?? 0).toFixed(1)}</b></div>`).join("")}
           <p class="muted">Bigger on an axis = better there (TO: fewer). Values: <span class="rd-a">add</span> · drop.</p></div></div>
+      ${formTable(m)}
       <div class="meta-line">This week: ${m.week > 0 ? "+" : ""}${m.week} cat${Math.abs(m.week) === 1 ? "" : "s"} · Value this week + next: ${m.value >= 0 ? "+" : ""}${m.value}</div>
       ${moveWhy(m)}</li>`;
   }).join("")}</ol>`
@@ -753,12 +756,12 @@ function planCard(s) {
     ${vsHead({ name: "You · with plan", sub: "small: now" }, { name: s.opponent, sub: "Opponent" })}
     ${vsRows(CATS9, p.after.mine, p.theirs, p.after.result, fmt, c => "now " + fmt(c, p.before.mine[c]))}
     <details class="breakdown" open><summary>What makes up these totals</summary>
-      <p class="muted">Each total = this week's ESPN totals so far + every counted player's season average × the games he still has (pickups and drops marked).
+      <p class="muted">Each total = this week's ESPN totals so far + every counted player's projection × the games he still has (pickups and drops marked).
         FG% and FT% come only from games still to come, because ESPN doesn't give makes and attempts so far.</p>
       ${breakdownTable("You · with plan", p.players, p.current, p.after.mine)}
       ${breakdownTable(s.opponent, p.opp_players, p.opp_current, p.theirs)}
     </details>
-    <p class="muted">Pickup cards show season averages (as on ESPN). The plan itself uses the same averages, moved by the “Projection ×” factor under a player when there's role news from the last 7 days (×1.2 bigger role, ×0.75 smaller), so a player taking over a teammate's role projects higher. News about one game stops counting once that game is played, except a start filling in for an injured teammate, which counts until ESPN no longer lists the teammate as out. Open <b>Why this move</b> on a card for the numbers behind it; a pickup only counts on days you have an open starting spot. <b>Stream</b> = wins more categories this week without dropping a clearly better player. <b>Upgrade</b> = adds clear value over the rest of this week and next week's matchup (per-game value across all 9 categories × games he plays), even if it doesn't change this week. Players with no games this week or next aren't suggested. Only healthy free agents are suggested (anyone listed OUT, day-to-day, on injured reserve or suspended is skipped). Adds happen by a player's game day, before tip-off.</p></section>`;
+    <p class="muted">Pickup cards show the per-game projection the plan uses: each player's recent games (60% season / 40% last 7 games, per minute, times his minutes in his last 3 games), with his last 3 games and his games ahead listed under the chart. Role news moves it (“Projection ×”: ×1.2 bigger role, ×0.75 smaller) only when it's newer than his last game; once he has played, that game already shows it. News about one game also stops counting once that game is played. Open <b>Why this move</b> on a card for the numbers behind it; a pickup only counts on days you have an open starting spot. <b>Stream</b> = wins more categories this week without dropping a clearly better player. <b>Upgrade</b> = adds clear value over the rest of this week and next week's matchup (per-game value across all 9 categories × games he plays), even if it doesn't change this week. Players with no games this week or next aren't suggested. Only healthy free agents are suggested (anyone listed OUT, day-to-day, on injured reserve or suspended is skipped). Adds happen by a player's game day, before tip-off.</p></section>`;
 }
 
 // ---- Weekly planner page (#planner) ----
@@ -883,7 +886,7 @@ function rosterGuideCard(d) {
   const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label}</option>`;
   const note = c === "Impact"
     ? "Impact = how much a game helps across all 9 categories compared with an average player on the two rosters (0 = average). Green helps, red hurts; <b>bold</b> = an actual game, plain = his projection. Week = the week's total, with his two best categories."
-    : `${c} on days a player starts: <b>bold</b> = actual stats from a past day, plain = projection (season average × the player's proj factor, shown under his name when it isn't ×1.00). Week = actual so far + projections for starts left.`;
+    : `${c} on days a player starts: <b>bold</b> = actual stats from a past day, plain = projection (his recent games × the player's proj factor, shown under his name when it isn't ×1.00). Week = actual so far + projections for starts left.`;
   return `<section class="card guide"><div class="slate-head"><h2>Roster guide</h2>
       <div class="picker">
         <select id="pl-roster" aria-label="Roster">${opt("mine", "Your team", planner.roster)}${d.planner.theirs ? opt("theirs", esc(d.opponent), planner.roster) : ""}</select>
@@ -922,9 +925,25 @@ function vsHead(left, right, mid = "VS") {
   return `<div class="vs-head">${side(left, "left")}<span class="vs-badge">${mid}</span>${side(right, "right")}</div>`;
 }
 
-// How the projection adjusts a player's season averages (role news); shown, not applied, in the card
+// What a player's projected line is based on: his recent games (or ESPN's season average), times fresh role news
+const basisText = x => x.basis === "recent" ? "recent games" : "season averages";
 const adjText = x => x.factor && Math.abs(x.factor - 1) >= 0.005
-  ? `Projection ×${x.factor.toFixed(2)}${x.note ? ` · ${esc(x.note)}` : ""}` : "Projection: season averages";
+  ? `Projection: ${basisText(x)} ×${x.factor.toFixed(2)}${x.note ? ` · ${esc(x.note)}` : ""}` : `Projection: ${basisText(x)}`;
+
+// The add's and drop's last 3 games, then their games ahead (this week and next) with opponents
+function formTable(m) {
+  const name = x => esc(x.name.replace(/ \(\w+\)$/, ""));
+  const cols = ["PTS", "REB", "AST", "3PM", "STL", "BLK", "TO"];
+  const rows = [[m.add, "Add"], [m.drop, "Drop"]].flatMap(([x, verb]) => (x.recent || []).map((g, i) => `<tr>
+    <th scope="row">${i ? "" : `${verb} ${name(x)}`}</th><td>${gameDay(g.date)}</td><td>${g.at === "@" ? "@" : "vs"} ${esc(g.opp)}</td>
+    <td>${Math.round(g.MIN)}</td>${cols.map(c => `<td>${+g[c]}</td>`).join("")}<td>${pct(`${g.FGM}-${g.FGA}`)}</td><td>${pct(`${g.FTM}-${g.FTA}`)}</td></tr>`));
+  const ahead = [[m.add, "Add"], [m.drop, "Drop"]].map(([x, verb]) => `<li><b>${verb} ${name(x)}</b>: ${(x.upcoming || []).length
+    ? x.upcoming.map(g => `${gameDay(g.date)} ${esc(g.opp)}`).join(" · ") : "no games through next week"}</li>`).join("");
+  return `${rows.length ? `<div class="h2h-scroll"><table class="last3"><caption>Last 3 games</caption>
+      <thead><tr><th scope="col">Player</th><th scope="col">Date</th><th scope="col">Opp</th><th scope="col">MIN</th>${cols.map(c => `<th scope="col">${c}</th>`).join("")}<th scope="col">FG%</th><th scope="col">FT%</th></tr></thead>
+      <tbody>${rows.join("")}</tbody></table></div>` : ""}
+    <ul class="ahead"><li class="muted">Games ahead (this week + next)</li>${ahead}</ul>`;
+}
 
 const tally = res => { const n = r => Object.values(res).filter(x => x === r).length; return [n("W"), n("L"), n("T")]; };
 const scoreLine = (res, oppName) => { const [w, l, t] = tally(res);

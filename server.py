@@ -413,13 +413,15 @@ def role_until(text, published):
     return pub + timedelta(days=(WEEKDAYS.index(word) - pub.weekday()) % 7)
 
 
-def role_factor(p, news, now):
+def role_factor(p, news, now, last_game=None):
     """(multiplier, reasons) from the newest role news of the last 7 days: x1.2 for a bigger role, x0.75 for a smaller one.
     News about one game that's already been played ('will start Wednesday', now Friday) is skipped: projections look ahead.
-    Recent minutes aren't used: the accuracy check (backtest.py) found them no better than the plain season average."""
+    So is news from before his last game (`last_game`, an ISO date): that game is already in the recent-games projection."""
     factor, why = 1.0, []
     for n in news:
         if not (n.get("role") and n.get("published")):  # undated news: age unknown, so it doesn't move the projection
+            continue
+        if last_game and local_time(n["published"]).date().isoformat() <= last_game:
             continue
         if n.get("until") and n["until"] < now.date().isoformat() and not n.get("while_out"):
             continue
@@ -430,13 +432,33 @@ def role_factor(p, news, now):
     return factor, why
 
 
-def project_players(players, news, now):
-    """The site's one projection recipe, stored on each player for every page to use:
-    per-game line = ESPN season average x role-news factor (1 when there's no recent role news)."""
+def game_logs(players):
+    """Each player's finished games this season, oldest first, as stat lines with date and opponent; [] if ESPN fails."""
+    today = datetime.now().date().isoformat()
+
+    def one(p):
+        try:
+            log = fetch_gamelog(p.playerId, current_season())
+        except Exception:
+            return p.playerId, []  # falls back to the season average
+        played = [g for g in log if g["date"] < today and (g["stats"].get("MIN") or "0") not in ("0", "", "-")]
+        return p.playerId, [stat_line(g) | {"date": g["date"], "opp": g["opp"], "at": g["at"]} for g in reversed(played)]
+
+    with ThreadPoolExecutor(8) as pool:
+        return dict(pool.map(one, {p.playerId: p for p in players}.values()))
+
+
+def project_players(players, news, now, logs=None):
+    """The site's one projection recipe, stored on each player for every page to use: per-game line =
+    recent-games blend (backtest.site: 60% season / 40% last-7-games per-minute rates x minutes in his last 3 games)
+    x role-news factor for news newer than his last game. Without a game log (ESPN down), the ESPN season average."""
     for p in players:
-        factor, why = role_factor(p, news.get(p.playerId, []), now)
-        avg = season_avg(p)
+        log = (logs or {}).get(p.playerId) or []
+        factor, why = role_factor(p, news.get(p.playerId, []), now, log[-1]["date"] if log else None)
+        avg = backtest.site(log) if log else season_avg(p)
         p.proj, p.proj_factor, p.proj_why = {k: avg.get(k, 0) * factor for k in streaming.KEYS}, round(factor, 2), "; ".join(why)
+        p.proj_basis = "recent" if log else "season"
+        p.recent = [{k: g[k] for k in ("date", "opp", "at", "MIN", *streaming.KEYS)} for g in log[-3:][::-1]]  # newest first
 
 
 def proj_avg(p):
@@ -511,10 +533,12 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
     for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
         pending_moves(team, rosters, today, league)
         league_order(team.roster, today)
-    project_players(me.roster, news, now)
+    # recent games need one game log per player; the quick first version uses season averages until the full build
+    logs = game_logs(me.roster + (opp.roster if opp else [])) if actuals else {}
+    project_players(me.roster, news, now, logs)
     if opp:
         # opponent gets the same recipe, role news included; the quick first version skips news for both teams
-        project_players(opp.roster, player_news(league, opp.roster) if actuals else {}, now)
+        project_players(opp.roster, player_news(league, opp.roster) if actuals else {}, now, logs)
 
     def player_row(p):
         return {
@@ -728,21 +752,24 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     # only healthy free agents: OUT, injured reserve, day-to-day or suspended players can't be counted on to play
     fas = [p for p in free_agents(league) if healthy(p)]
     news = player_news(league, me.roster + fas + opp.roster)  # same recipe for both teams and free agents
-    project_players(me.roster + fas + opp.roster, news, now)
+    project_players(me.roster + fas + opp.roster, news, now, game_logs(me.roster + fas + opp.roster))
+
+    next_first, next_last = week_dates(league, week + 1, today)
 
     def entry(p, team_id, news_items, name=None):
-        """A player for the planner, with the site's projection (season average x role-news factor)."""
+        """A player for the planner, with the site's projection, his last 3 games and his games through next week."""
         lines = game_lines(p, team_id, lineups, now, first, last)
-        season = {k: season_avg(p).get(k, 0) for k in streaming.KEYS}  # what ESPN shows, for display
+        season = {k: season_avg(p).get(k, 0) for k in streaming.KEYS}  # what ESPN shows
+        ahead = sorted((g for g in p.schedule.values() if today <= g["date"].date() <= next_last), key=lambda g: g["date"])
         return {"id": p.playerId, "name": name or p.name, "note": p.proj_why, "per_game": proj_avg(p),
-                "season": season, "factor": p.proj_factor,
+                "season": season, "factor": p.proj_factor, "basis": p.proj_basis, "recent": p.recent,
+                "upcoming": [{"date": g["date"].date().isoformat(), "opp": g["team"]} for g in ahead],
                 "games" if team_id else "lines": lines}
 
     opp_players = [entry(p, opp.team_id, []) for p in opp.roster]
     mine = [entry(p, me.team_id, news.get(p.playerId, [])) for p in me.roster]
     fa_entries = [entry(p, None, news.get(p.playerId, []), f"{p.name} ({p.proTeam})") for p in fas]
     values = streaming.player_values({e["id"]: e["per_game"] for e in mine + fa_entries + opp_players})
-    next_first, next_last = week_dates(league, week + 1, today)
     # games in next week's matchup; nothing for anyone OUT now, since his return date is unknown
     next_games = {p.playerId: 0 if p.injuryStatus == "OUT" else
                   sum(next_first <= x["date"].date() <= next_last for x in p.schedule.values()) for p in keepers + fas}

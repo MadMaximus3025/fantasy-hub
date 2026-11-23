@@ -80,11 +80,6 @@ def minutes_factor(h, when=None):
     return {k: v * f for k, v in avg(h).items()}
 
 
-def site(h, when=None):
-    """The site's projection as it can be replayed: the season average (role news isn't kept for past games)."""
-    return avg(h)
-
-
 def blend(h, when=None, recent=7, w=0.4):
     """Per-minute rates: 60% season, 40% last 7 games; times recent minutes (last 3 games)."""
     def rates(gs):
@@ -93,6 +88,12 @@ def blend(h, when=None, recent=7, w=0.4):
     s, r = rates(h), rates(h[-recent:])
     minutes = mean(g["MIN"] for g in h[-3:])
     return {k: ((1 - w) * s[k] + w * r[k]) * minutes for k in STATS}
+
+
+def site(h, when=None):
+    """The site's projection as it can be replayed: the recent-games blend (role news isn't kept for past games).
+    Chosen over the plain season average because it reacts to new roles and slumps at no cost in accuracy here."""
+    return blend(h, when)
 
 
 def last5(h, when=None):
@@ -114,7 +115,7 @@ def learned(h, when=None, k=20, start=5):
     return {key: base[key] * (1 + ((got[key] / proj[key] - 1) if proj[key] else 0) * n / (n + k)) for key in STATS}
 
 
-METHODS = {"site (now)": site, "minutes factor": minutes_factor, "blend 60/40": blend, "last 5": last5, "site+learned": learned}
+METHODS = {"site (now)": site, "season avg": season, "minutes factor": minutes_factor, "last 5": last5, "site+learned": learned}
 HINDSIGHT = "hindsight*"  # cheats with the whole season's average (future games included): a floor for average-based methods
 
 

@@ -508,10 +508,12 @@ hurt = f(81, "Hurt", [3], injury="OUT", PTS=20, MIN=20); hurt.stats["2027_last_7
 server.project_players([hurt], {81: [{"role": -1, "headline": "Hurt to the bench", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}]}, NOW)
 assert server.availability([hurt], NOW, MON, MON + timedelta(days=6), 1, None)[0]["line"]["PTS"] == 15  # who-plays toggle
 
-# accuracy replay = the season average; the dropped minutes factor stays in backtest.py to compare against
+# accuracy replay = the site's recipe, the recent-games blend; season average and minutes factor stay to compare against
 bt = __import__("backtest")
 hist = [{"date": f"2026-11-{d:02d}", "MIN": m, **{k: 10.0 for k in bt.STATS}} for d, m in [(1, 30), (3, 30), (5, 30), (14, 40), (16, 40)]]
-assert bt.site(hist, when="2026-11-18")["PTS"] == 10
+assert bt.site(hist, when="2026-11-18") == bt.blend(hist)
+assert abs(bt.site(hist)["PTS"] - 50 / 170 * (30 + 40 + 40) / 3) < 1e-9  # per-minute rate x minutes in the last 3 games
+assert bt.season(hist)["PTS"] == 10
 assert bt.minutes_factor(hist, when="2026-11-18")["PTS"] == 10 * 40 / 34  # Nov 14 + 16 in the last 7 days
 # opponent projections use the same recipe as yours, role news included (full build)
 fresh_news = {"role": 1, "headline": "Opp A will start", "published": (NOW - timedelta(days=1)).isoformat() + "Z"}
@@ -524,6 +526,26 @@ server.build_dashboard(league, me, NOW, {}, week=5, actuals=False)  # quick firs
 assert opp.roster[0].proj_factor == 1.0
 server.player_news = real_news
 server._league["value"] = None; server._cache.clear(); server._news.clear()  # leave no fake state behind
+
+# recent games: projection = blend of his finished games; news from before his last game no longer counts
+gl = lambda d, mins, pts: {"date": d, "opp": "BOS", "at": "@", "result": "", "stats": {"MIN": mins, "FG%": "4-10", "FT%": "1-2",
+                           "3PM": "1", "PTS": pts, "REB": "2", "AST": "1", "STL": "0", "BLK": "0", "TO": "1"}}
+real_log, real_dt = server.fetch_gamelog, server.datetime
+server.datetime = NS(now=lambda: NOW, fromisoformat=datetime.fromisoformat)
+server.fetch_gamelog = lambda pid, season: [gl("2026-11-18", "30", "99"), gl("2026-11-17", "0", "0"),  # today's game + a DNP: skipped
+                                            gl("2026-11-16", "20", "10"), gl("2026-11-14", "30", "20")] if pid == 90 else 1 / 0
+streamer, nolog = f(90, "Streamer", [3], PTS=5, MIN=10), f(91, "No log", [3], PTS=7, MIN=10)
+logs = server.game_logs([streamer, nolog, streamer])
+assert [g["date"] for g in logs[90]] == ["2026-11-14", "2026-11-16"] and logs[91] == [], logs  # oldest first; ESPN error -> []
+old_news = {"role": 1, "headline": "Streamer will start", "published": "2026-11-15T12:00:00Z"}  # before his 11/16 game
+server.project_players([streamer, nolog], {90: [old_news]}, NOW, logs)
+assert streamer.proj_basis == "recent" and streamer.proj_factor == 1.0, streamer.proj_why  # old news: already in his games
+assert abs(streamer.proj["PTS"] - 30 / 50 * 25) < 1e-9  # 30 pts in 50 min, x 25 min in his last games
+assert [g["date"] for g in streamer.recent] == ["2026-11-16", "2026-11-14"] and streamer.recent[0]["PTS"] == 10  # newest first
+assert nolog.proj_basis == "season" and nolog.proj["PTS"] == 7 and nolog.recent == []  # no game log: ESPN season average
+server.project_players([streamer], {90: [dict(old_news, published="2026-11-17T12:00:00Z")]}, NOW, logs)
+assert streamer.proj_factor == 1.2  # news newer than his last game still counts
+server.fetch_gamelog, server.datetime = real_log, real_dt
 
 # with_live(): ESPN's totals (finished days) + today's starters, in-progress games included; % weighted by attempts
 board = {"PTS": {"score": 380.0}, "TO": {"score": 60.0}, "FG%": {"score": 0.5}, "FT%": {"score": 0.8}}
