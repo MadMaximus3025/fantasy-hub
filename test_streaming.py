@@ -78,6 +78,7 @@ pri = st.plan(D, 2, me, opp, cur, fa + [{"id": 13, "name": "Next Week Star", "li
 assert [(x["kind"], x["add"]["name"]) for x in pri["moves"]] == [("stream", "Streamer")], pri["moves"]
 m0 = pri["moves"][0]
 assert m0["expected"][1] > m0["expected"][0] and 0 <= m0["win"][0] <= m0["win"][1] <= 1, m0
+assert pri["before"]["expected"] == m0["expected"][0] and pri["after"]["expected"] == m0["expected"][1]  # one summary, same numbers
 assert m0["add_stats"]["PTS"] == 60 and m0["drop_stats"]["PTS"] == (2 if m0["day"] == D[0] else 0), m0  # what each side changes this week
 
 # next-week upgrades only touch locked categories: costing a close category this week blocks it
