@@ -581,4 +581,9 @@ slots_league = NS(espn_request=NS(league_get=lambda params: {"settings": {"roste
                   {"0": 1, "1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "10": 1, "11": 3, "12": 3, "13": 1}}}}))
 assert server.lineup_slots(slots_league) == ["PG", "SG", "SF", "PF", "C", "G", "F/C", "UT", "UT", "UT"]  # BE and IR left out
 
+# lineup page: each player's ESPN slot per day comes from that day's roster (None = not on the team that day)
+sp = NS(playerId=7, lineupSlot="BE")
+assert server.slot_on(sp, 1, TODAY, {TODAY: {1: {7: {"lineupSlotId": 11}}}}) == "UT"  # moved into a UTIL spot for that day
+assert server.slot_on(sp, 1, TODAY, {TODAY: {1: {}}}) is None and server.slot_on(sp, 1, TODAY, {}) == "BE"  # dropped / no data
+
 print("ok")
