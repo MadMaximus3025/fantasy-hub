@@ -1004,8 +1004,10 @@ def total(lines):
 
 
 def pickup_record(league, me, today):
-    """Your adds from ESPN's activity log, each graded on real games: the added player's games from the add day to the end
-    of that Monday-Sunday week vs the dropped player's games over the same days (whoever he played for)."""
+    """Your adds from ESPN's activity log, each graded on real games over his time on your team: the added player's games
+    from the add day until you dropped him (or yesterday) vs the dropped player's games over the same days (wherever he
+    played). Per category: the net difference; overall: the net in 9-category value (each category's difference over how
+    much that stat varies between players, summed; TO counts negative)."""
     # ESPN returns the activity feed a slice at a time; page back through it (shortcut: at most 10 pages of 100 messages)
     feed, seen = [], set()
     for offset in range(0, 1000, 100):
@@ -1015,17 +1017,22 @@ def pickup_record(league, me, today):
             break
         seen.update((a.date, repr(a)) for a in new)
         feed += new
-    moves = []
+    moves, dropped_on = [], {}  # dropped_on: player name -> dates you dropped him
     for a in feed:
         acts = [(action, player) for team, action, player, *_ in a.actions if getattr(team, "team_id", None) == me.team_id]
         adds = [pl for action, pl in acts if action in ("FA ADDED", "WAIVER ADDED")]
         drops = [pl for action, pl in acts if action == "DROPPED"]
+        day = datetime.fromtimestamp(a.date / 1000).date()
+        for pl in drops:
+            dropped_on.setdefault(pl, []).append(day)
         for i, add in enumerate(adds):  # several adds in one move: pair them with the drops in order
-            moves.append((datetime.fromtimestamp(a.date / 1000).date(), add, drops[i] if i < len(drops) else None))
+            moves.append((day, add, drops[i] if i < len(drops) else None))
     ids = lambda name: league.player_map.get(name) if isinstance(league.player_map.get(name), int) else None
     out, skipped = [], []
     for day, add, drop in moves:
-        end = min(week_bounds(day)[1], today - timedelta(days=1))
+        # his time on your team: until the day before you dropped him (games that day count for the next team), or yesterday
+        later = [d for d in dropped_on.get(add, []) if d > day]
+        end = min(later) - timedelta(days=1) if later else today - timedelta(days=1)
         if end < day:
             continue  # nothing finished yet
         def games(name):
@@ -1044,9 +1051,21 @@ def pickup_record(league, me, today):
             continue
         ta, td = total(ga), total(gd)
         res = cat_verdict(ta, td)
-        out.append({"date": day.isoformat(), "through": end.isoformat(), "add": add, "drop": drop, "games": [len(ga), len(gd)],
-                    "add_totals": ta, "drop_totals": td, "result": res,
-                    "won": sum(r == "W" for r in res.values()), "lost": sum(r == "L" for r in res.values())})
+        pct = lambda t, m, a: t[m] / t[a] if t[a] else None
+        net = {c: ta[c] - td[c] for c in streaming.COUNTING}
+        for c, m, a in (("FG%", "FGM", "FGA"), ("FT%", "FTM", "FTA")):
+            x, y = pct(ta, m, a), pct(td, m, a)
+            net[c] = None if x is None or y is None else x - y
+        out.append({"date": day.isoformat(), "through": end.isoformat(), "still_yours": not later, "add": add, "drop": drop,
+                    "games": [len(ga), len(gd)], "add_totals": ta, "drop_totals": td, "result": res, "net": net,
+                    "won": sum(r == "W" for r in res.values()), "lost": sum(r == "L" for r in res.values()),
+                    "_lines": ga + gd})
+    # overall net value: z-scores against the per-game lines of every player graded (the mean cancels in the difference)
+    pool = {i: l for i, l in enumerate(l for x in out for l in x.pop("_lines"))}
+    if len(pool) >= 2:
+        z = streaming.zscorer(pool)
+        for x in out:
+            x["value"] = round(sum(z(x["add_totals"]).values()) - sum(z(x["drop_totals"]).values()), 1)
     return out, skipped
 
 
