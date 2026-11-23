@@ -86,8 +86,7 @@ def week_dates(league, week, today):
     """First and last day of matchup `week` from ESPN's matchup period -> scoring periods map (1 scoring period = 1 day)."""
     periods = (getattr(league.settings, "matchup_periods", None) or {}).get(str(week)) or []
     if len(periods) > 1 and all(isinstance(p, int) for p in periods):
-        # scoring period ids are consecutive days; league.scoringPeriodId is today
-        return tuple(today + timedelta(days=p - league.scoringPeriodId) for p in (min(periods), max(periods)))
+        return tuple(period_date(league, p, today) for p in (min(periods), max(periods)))
     return week_bounds(today, week - league.currentMatchupPeriod)  # ESPN gave no day list: count Mon-Sun weeks
 
 
@@ -111,12 +110,54 @@ def played(entry, period):
     return None
 
 
+_periods = {}  # id of a league's pro schedule -> {date: ESPN scoring period}
+
+
+def period_map(league):
+    """{date: ESPN scoring period} for every day with NBA games, from ESPN's schedule (games are keyed by period)."""
+    sched = getattr(league, "pro_schedule", None) or {}
+    key = id(sched)
+    if key not in _periods:
+        _periods.clear()  # one league per server; keep only the latest schedule's map
+        _periods[key] = {datetime.fromtimestamp(g["date"] / 1000).date(): int(period)
+                         for games in sched.values() for period, gs in games.items() for g in gs}
+    return _periods[key]
+
+
+def scoring_period(league, d, today):
+    """ESPN's scoring period for date d. ESPN's current period (league.scoringPeriodId) rolls over some hours after
+    midnight, so it can't stand in for "today". A day without games counts on from the nearest earlier day that has
+    some; no schedule at all: offset from today."""
+    known = period_map(league)
+    before = max((x for x in known if x <= d), default=None)
+    if before is None:
+        return league.scoringPeriodId + (d - today).days
+    return known[before] + (d - before).days
+
+
+def period_date(league, period, today):
+    """The date of ESPN scoring period `period` (the inverse of scoring_period)."""
+    by_period = {v: k for k, v in period_map(league).items()}
+    before = max((x for x in by_period if x <= period), default=None)
+    if before is None:
+        return today + timedelta(days=period - league.scoringPeriodId)
+    return by_period[before] + timedelta(days=period - before)
+
+
+def live_days(league, lineups, today):
+    """Days up to today whose stats ESPN hasn't put into the matchup totals yet: its current period and later."""
+    current = getattr(league, "scoringPeriodId", None)
+    if current is None:
+        return [d for d in (lineups or {}) if d == today]
+    return [d for d in (lineups or {}) if d <= today and scoring_period(league, d, today) >= current]
+
+
 def day_lineups(league, start, end, today, team_ids, week):
     """Each day's starting lineup per team, from ESPN's per-day rosters: {date: {team_id: {player_id: that day's stats or None}}},
     and each day's full roster entries {date: {team_id: {player_id: entry}}} (future days include pending adds and drops)."""
     def one(d):
         try:
-            period = league.scoringPeriodId + (d - today).days
+            period = scoring_period(league, d, today)
             data = league.espn_request.league_get(
                 params={"view": ["mMatchupScore", "mScoreboard"], "scoringPeriodId": period},
                 headers={"x-fantasy-filter": json.dumps({"schedule": {"filterMatchupPeriodIds": {"value": [week]}}})},
@@ -256,15 +297,16 @@ def scores(current_cats):
     return {k: (v or {}).get("score", 0) for k, v in (current_cats or {}).items()}
 
 
-def with_live(current_cats, lineups, today, team_id):
+def with_live(current_cats, lineups, days, team_id):
     """ESPN's matchup totals cover finished scoring periods only; ESPN's live view also counts the period in progress.
-    lineups[today] is always ESPN's current period (see day_lineups), so add its starters' stats, games in progress
-    included. FG%/FT% have no makes/attempts in the totals: weight ESPN's % by the earlier days' attempts instead."""
-    now = [s for s in ((lineups or {}).get(today, {}).get(team_id) or {}).values() if s]
+    Add the starters' stats of `days` (live_days(): ESPN's current period up to today), games in progress included.
+    FG%/FT% have no makes/attempts in the totals: weight ESPN's % by the earlier days' attempts instead."""
+    now = [s for d in days for s in ((lineups or {}).get(d, {}).get(team_id) or {}).values() if s]
     if not current_cats or not now:
         return current_cats
     add = lambda k, rows: sum(s.get(k, 0) or 0 for s in rows)
-    earlier = [s for d, teams in lineups.items() if d < today for s in (teams.get(team_id) or {}).values() if s]
+    first = min(days)
+    earlier = [s for d, teams in lineups.items() if d < first for s in (teams.get(team_id) or {}).values() if s]
     out = {k: dict(v or {}) for k, v in current_cats.items()}
     for k in COUNTING:
         if k in out:
@@ -559,14 +601,18 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
         "team": me.team_name,
         "roster": [player_row(p) for p in me.roster],
         "week": {"start": first.isoformat(), "end": last.isoformat(), "today": today.isoformat(), "number": week, "current": current,
-                 "count": max([week, current, *map(int, getattr(league.settings, "matchup_periods", None) or {})])},
+                 "count": max([week, current, *map(int, getattr(league.settings, "matchup_periods", None) or {})]),
+                 # ESPN's current scoring period vs the one its schedule gives today; they differ until ESPN rolls over
+                 "periods": {"espn": getattr(league, "scoringPeriodId", None),
+                             "today": scoring_period(league, today, today) if hasattr(league, "scoringPeriodId") else None}},
         "opponent": None,
     }
     if actuals:  # one game-log request per starter; the quick first version skips it
         fill_actuals(lineups, today)
     # match ESPN's live totals: finished days plus today's games, in progress included
-    my_cats = with_live(my_cats, lineups, today, me.team_id)
-    opp_cats = with_live(opp_cats, lineups, today, opp.team_id) if opp else opp_cats
+    live = live_days(league, lineups, today)
+    my_cats = with_live(my_cats, lineups, live, me.team_id)
+    opp_cats = with_live(opp_cats, lineups, live, opp.team_id) if opp else opp_cats
     data["slate"] = {"mine": daily_slate(me.roster, me.team_id, first, last, today, lineups), "nba": nba_games(league, first, last)}
     data["planner"] = {"mine": planner_rows(me.roster, me.team_id, first, last, today, lineups),
                        "teams": team_games(league, first, last)}
@@ -732,8 +778,9 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     first, last = week_dates(league, week, today)
     opp, my_cats, opp_cats = matchup_sides(league, me, week)
     lineups, rosters = day_lineups(league, first, last, today, {me.team_id} | ({opp.team_id} if opp else set()), week)
-    my_cats = with_live(my_cats, lineups, today, me.team_id)  # same live totals as the dashboard
-    opp_cats = with_live(opp_cats, lineups, today, opp.team_id) if opp else opp_cats
+    live = live_days(league, lineups, today)  # same live totals as the dashboard
+    my_cats = with_live(my_cats, lineups, live, me.team_id)
+    opp_cats = with_live(opp_cats, lineups, live, opp.team_id) if opp else opp_cats
     for team in (me, opp) if opp else (me,):  # pending adds/drops first, then the same roster order on every page
         pending_moves(team, rosters, today, league)
         league_order(team.roster, today)

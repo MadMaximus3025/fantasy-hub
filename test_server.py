@@ -552,12 +552,27 @@ board = {"PTS": {"score": 380.0}, "TO": {"score": 60.0}, "FG%": {"score": 0.5}, 
 ln = lambda **k: {"PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "3PM": 0, "TO": 0, "FGM": 0, "FGA": 0, "FTM": 0, "FTA": 0, **k}
 lu = {MON: {1: {10: ln(PTS=100, FGM=40, FGA=80, FTA=0)}},  # earlier day: 80 attempts behind ESPN's .500
       TODAY: {1: {10: ln(PTS=30, TO=2, FGM=10, FGA=20, FTM=4, FTA=5), 11: None}, 2: {20: ln(PTS=9)}}}  # 11 = no stats yet
-live = server.with_live(board, lu, TODAY, 1)
+live = server.with_live(board, lu, [TODAY], 1)
 assert live["PTS"]["score"] == 410 and live["TO"]["score"] == 62, live  # 380 + 30; only team 1's starters
 assert abs(live["FG%"]["score"] - (0.5 * 80 + 10) / (80 + 20)) < 1e-9, live  # (40 + 10) / 100
 assert live["FT%"]["score"] == 0.8 and board["PTS"]["score"] == 380  # no earlier FT attempts: ESPN's % kept; input untouched
-assert server.with_live(board, lu, TODAY + timedelta(days=1), 1) is board  # today not in the week's data: unchanged
-assert server.with_live(board, {TODAY: {1: {10: None}}}, TODAY, 1) is board  # nobody has played yet today
-first_fg = server.with_live({"FG%": {"score": 0}}, {TODAY: {1: {10: ln(FGM=3, FGA=4)}}}, TODAY, 1)
+assert server.with_live(board, lu, [TODAY + timedelta(days=1)], 1) is board  # day not in the week's data: unchanged
+assert server.with_live(board, {TODAY: {1: {10: None}}}, [TODAY], 1) is board  # nobody has played yet today
+first_fg = server.with_live({"FG%": {"score": 0}}, {TODAY: {1: {10: ln(FGM=3, FGA=4)}}}, [TODAY], 1)
 assert first_fg["FG%"]["score"] == 0.75, first_fg  # first games of the week: today's % alone
+# dates -> ESPN scoring periods come from ESPN's schedule, not from "today = current period": ESPN's current period
+# rolls over hours after midnight, and until then every day would read the day before's lineup
+ms = lambda d, h=19: datetime(d.year, d.month, d.day, h).timestamp() * 1000
+sched = {1: {"40": [{"date": ms(MON)}], "42": [{"date": ms(MON + timedelta(days=2))}]}, 2: {"41": [{"date": ms(MON + timedelta(days=1))}]}}
+morning = NS(pro_schedule=sched, scoringPeriodId=40)  # it's Tuesday, but ESPN still says Monday's period
+TUE = MON + timedelta(days=1)
+assert [server.scoring_period(morning, MON + timedelta(days=i), TUE) for i in range(4)] == [40, 41, 42, 43]  # Thu: no games, counts on
+assert server.period_date(morning, 41, TUE) == TUE and server.period_date(morning, 44, TUE) == MON + timedelta(days=4)
+lu2 = {MON: {}, TUE: {}, MON + timedelta(days=2): {}}
+assert server.live_days(morning, lu2, TUE) == [MON, TUE]  # Monday isn't in ESPN's totals yet, so it's added too
+assert server.live_days(NS(pro_schedule=sched, scoringPeriodId=41), lu2, TUE) == [TUE]
+assert server.scoring_period(NS(pro_schedule={}, scoringPeriodId=40), TUE, TUE) == 40  # no schedule: today = ESPN's period
+two = server.with_live(board, {MON: {1: {10: ln(PTS=20)}}, TUE: {1: {10: ln(PTS=5)}}}, [MON, TUE], 1)
+assert two["PTS"]["score"] == 405, two  # both days' stats on top of ESPN's totals
+
 print("ok")
