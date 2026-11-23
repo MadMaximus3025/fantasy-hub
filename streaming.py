@@ -140,7 +140,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                 games[d] = line
                 new_used[d] += 1
         new_roster.append({"id": add["id"], "name": add["name"], "games": games,
-                           **{k: add.get(k) for k in ("note", "per_game", "season", "factor")}})
+                           **{k: add.get(k) for k in ("note", "per_game", "season", "factor", "basis", "recent", "upcoming")}})
         return new_roster, new_used, games
 
     for _ in range(max(0, int(acquisitions))):
@@ -183,9 +183,10 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         best = s
         added_on[fa["id"]] = day
         dropped.add(drop["id"])
-        # display: season averages as ESPN shows them, plus the projection factor and its reason
-        side = lambda p: {"id": p["id"], "name": p["name"], "line": p.get("season") or p.get("per_game"),
-                          "factor": p.get("factor") or 1, "note": p.get("note") or "", "value": round(values.get(p["id"], 0), 1)}
+        # display: the per-game projection the plan used, why, his last games and his games ahead
+        side = lambda p: {"id": p["id"], "name": p["name"], "line": p.get("per_game") or p.get("season"),
+                          "factor": p.get("factor") or 1, "note": p.get("note") or "", "value": round(values.get(p["id"], 0), 1),
+                          **{k: p.get(k) for k in ("basis", "recent", "upcoming")}}
         moves.append({"day": day, "add": side(fa), "drop": side(drop),
                       "games": sorted(games), "why": fa.get("note", ""),
                       "kind": "stream" if dw > 0 else "upgrade", "week": dw, "value": round(dv, 2),
