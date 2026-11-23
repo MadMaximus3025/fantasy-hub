@@ -261,6 +261,8 @@ def planner_rows(roster, team_id, start, end, today, lineups, rosters=None):
              "elig": [x for x in getattr(p, "eligibleSlots", []) if x not in ("BE", "IR")],  # lineup slots he can fill
              # his ESPN lineup slot each day (PG ... UT, BE, IR); None when he isn't on the team that day
              "dslots": [slot_on(p, team_id, d, rosters) for d in days],
+             "play": [round(play_prob(p, d), 2) for d in days],  # < 1 on back-to-back second nights
+             "b2b": getattr(p, "b2b_record", None),  # [missed, chances] this season
              "avg": {k: proj_avg(p).get(k, 0) for k in keep},  # projection (what every page uses)
              "season": {k: season_avg(p).get(k, 0) for k in keep}, "factor": getattr(p, "proj_factor", 1), "why": getattr(p, "proj_why", ""),
              "days": [day_state(p, team_id, d, today, lineups) for d in days],
@@ -344,10 +346,14 @@ def with_live(current_cats, lineups, days, team_id):
     return out
 
 
+def start_days(p, now, start, end, team_id=None, lineups=None):
+    """Days p starts this week in games that haven't begun (played ones are in the current matchup totals already)."""
+    return [x["date"].date() for x in p.schedule.values()
+            if now < x["date"] and start <= x["date"].date() <= end and starting(p, team_id, x["date"].date(), lineups)]
+
+
 def starts_left(p, now, start, end, team_id=None, lineups=None):
-    """Games p starts this week that haven't begun (played ones are in the current matchup totals already)."""
-    return sum(1 for x in p.schedule.values()
-               if now < x["date"] and start <= x["date"].date() <= end and starting(p, team_id, x["date"].date(), lineups))
+    return len(start_days(p, now, start, end, team_id, lineups))
 
 
 def availability(roster, now, start, end, team_id=None, lineups=None):
@@ -357,8 +363,9 @@ def availability(roster, now, start, end, team_id=None, lineups=None):
     for p in roster:
         if p.injuryStatus in (None, "", "ACTIVE", "NORMAL"):
             continue
-        g = starts_left(p, now, start, end, team_id, lineups)
-        if g:
+        days = start_days(p, now, start, end, team_id, lineups)
+        g = sum(play_prob(p, d) for d in days)
+        if days:
             avg = proj_avg(p)
             rows.append({"id": p.playerId, "name": p.name, "status": p.injuryStatus, "games": g, "counted": p.injuryStatus != "OUT",
                          "line": {k: avg.get(k, 0) * g for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
@@ -371,11 +378,11 @@ def contributions(roster, now, start, end, team_id=None, lineups=None):
     for p in roster:
         if p.injuryStatus == "OUT":
             continue
-        g = starts_left(p, now, start, end, team_id, lineups)
-        if not g:
+        days = start_days(p, now, start, end, team_id, lineups)
+        if not days:
             continue
-        avg = proj_avg(p)
-        rows.append({"name": p.name, "games": g, **{k: avg.get(k, 0) * g for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
+        avg, eg = proj_avg(p), sum(play_prob(p, d) for d in days)  # back-to-back second nights count as his chance to play
+        rows.append({"name": p.name, "games": len(days), **{k: avg.get(k, 0) * eg for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
     return rows
 
 
@@ -515,11 +522,48 @@ def game_logs(players):
         return dict(pool.map(one, {p.playerId: p for p in players}.values()))
 
 
+B2B_PRIOR_WEIGHT = 4  # a player's own back-to-back record counts like this many games against the league rate
+b2b_league = {"rate": None, "chances": 0}  # last league-wide rate, shown on the dashboard
+
+
+def team_dates(p):
+    return {x["date"].date() for x in getattr(p, "schedule", {}).values()}
+
+
+def second_night(p, d):
+    """Is d the second night of a back-to-back for p's team?"""
+    dates = team_dates(p)
+    return d in dates and d - timedelta(days=1) in dates
+
+
+def play_prob(p, d):
+    """Chance p plays on day d: lower on the second night of a back-to-back (his rest rate), 1 otherwise."""
+    return 1 - getattr(p, "b2b_rest", 0) if second_night(p, d) else 1.0
+
+
+def b2b_counts(p, log, today):
+    """(chances, misses) this season: past second nights of his team's back-to-backs after he played the first night;
+    a miss = no game for him that night (rest or a knock)."""
+    played = {g["date"] for g in log}
+    dates = team_dates(p)
+    chances = [d for d in dates if d < today and d - timedelta(days=1) in dates and (d - timedelta(days=1)).isoformat() in played]
+    return len(chances), sum(d.isoformat() not in played for d in chances)
+
+
 def project_players(players, news, now, logs=None):
     """The site's one projection recipe, stored on each player for every page to use: per-game line =
     recent-games blend (backtest.site: 60% season / 40% last-7-games per-minute rates x minutes in his last 3 games)
     x role-news factor for news newer than his last game. Without a game log (ESPN down), the ESPN season average."""
+    # back-to-back rest: each player's own record, pulled toward the rate of everyone projected here
+    counts = {p.playerId: b2b_counts(p, (logs or {}).get(p.playerId) or [], now.date()) for p in players} if logs else {}
+    n, m = sum(c for c, _ in counts.values()), sum(x for _, x in counts.values())
+    prior = m / n if n else 0.0
+    if n:
+        b2b_league.update(rate=round(prior, 3), chances=n)
     for p in players:
+        c, x = counts.get(p.playerId, (0, 0))
+        p.b2b_rest = (x + B2B_PRIOR_WEIGHT * prior) / (c + B2B_PRIOR_WEIGHT) if counts else 0.0
+        p.b2b_record = [x, c]
         log = (logs or {}).get(p.playerId) or []
         factor, why = role_factor(p, news.get(p.playerId, []), now, log[-1]["date"] if log else None)
         avg = backtest.site(log) if log else season_avg(p)
@@ -660,7 +704,8 @@ def build_dashboard(league, me, now, news, week=None, actuals=True):
                              "theirs": availability(opp.roster, now, first, last, opp.team_id, lineups)},
         }
     add_impact(data["planner"]["mine"] + data["planner"].get("theirs", []))
-    data["lineup"] = lineup_slots(league)  # starting slots, for the lineup page (read once per league object)  # scored against both rosters together
+    data["lineup"] = lineup_slots(league)  # starting slots, for the lineup page (read once per league object)
+    data["b2b"] = dict(b2b_league)  # league-wide back-to-back rest rate behind the projections  # scored against both rosters together
     return data
 
 
@@ -722,8 +767,8 @@ def game_lines(p, team_id, lineups, now, first, last):
     if p.injuryStatus == "OUT":
         return {}
     avg = proj_avg(p)
-    line = {k: avg.get(k, 0) for k in streaming.KEYS}
-    return {x["date"].date(): line for x in p.schedule.values()
+    line = lambda d: {k: avg.get(k, 0) * play_prob(p, d) for k in streaming.KEYS}  # back-to-backs: his chance to play
+    return {x["date"].date(): line(x["date"].date()) for x in p.schedule.values()
             if now < x["date"] and first <= x["date"].date() <= last
             and (team_id is None or starting(p, team_id, x["date"].date(), lineups))}
 
@@ -746,8 +791,12 @@ def league_order(roster, today):
     roster.sort(key=key)
 
 
-def free_agents(league, size=60):
-    """Most-owned free agents (not waivers: those can't be added the same day), with their NBA schedule attached."""
+FA_OWNED, FA_HOT = 60, 20  # the planner looks at the most-owned free agents plus the best of the rest over the last 7 days
+
+
+def free_agents(league, size=150):
+    """Free agents (not waivers: those can't be added the same day), with their NBA schedule attached: the FA_OWNED
+    most-owned plus the FA_HOT best of the next ones by ESPN's last-7-days averages (hot players few own yet; marked hot)."""
     filters = {"players": {"filterStatus": {"value": ["FREEAGENT"]}, "limit": size,
                            "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}}
     data = league.espn_request.league_get(params={"view": "kona_player_info", "scoringPeriodId": league.scoringPeriodId},
@@ -759,7 +808,21 @@ def free_agents(league, size=60):
             players.append(Player(p, league.year, league.pro_schedule))
         except Exception:
             logging.exception("Skipped a free agent ESPN sent in an unexpected shape")  # one bad entry shouldn't sink the plan
-    return players
+    return pick_free_agents(players)
+
+
+def pick_free_agents(players):
+    """The FA_OWNED first (most-owned) plus the FA_HOT best of the rest by last-7-days averages, marked hot."""
+    owned, rest = players[:FA_OWNED], players[FA_OWNED:]
+    recent = {i: p.stats.get(f"{p.year}_last_7", {}).get("avg") for i, p in enumerate(rest)}
+    recent = {i: {k: (l or {}).get(k, 0) for k in streaming.KEYS} for i, l in recent.items() if l and l.get("FGA")}
+    hot = []
+    if len(recent) >= 2:
+        z = streaming.zscorer(recent)
+        hot = [rest[i] for i in sorted(recent, key=lambda i: -sum(z(recent[i]).values()))[:FA_HOT]]
+        for p in hot:
+            p.hot = True
+    return owned + hot
 
 
 def lineup_slots(league):
@@ -849,6 +912,7 @@ def plan_inputs(league, me, opp, now, today, week, first, last, lineups):
         ahead = sorted((g for g in p.schedule.values() if today <= g["date"].date() <= next_last), key=lambda g: g["date"])
         return {"id": p.playerId, "name": name or p.name, "note": p.proj_why, "per_game": proj_avg(p),
                 "season": season, "factor": p.proj_factor, "basis": p.proj_basis, "recent": p.recent,
+                "hot": getattr(p, "hot", False), "b2b": getattr(p, "b2b_record", None), "b2b_rest": round(getattr(p, "b2b_rest", 0), 2),
                 "elig": [x for x in p.eligibleSlots if x not in ("BE", "IR")],  # lineup slots he can fill
                 "upcoming": [{"date": g["date"].date().isoformat(), "opp": g["team"]} for g in ahead],
                 "games" if team_id else "lines": lines}

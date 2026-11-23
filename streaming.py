@@ -232,7 +232,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
                 games[d] = line
                 new_used[d] += 1
         new_roster.append({"id": add["id"], "name": add["name"], "games": games,
-                           **{k: add.get(k) for k in ("note", "per_game", "season", "factor", "basis", "recent", "upcoming", "elig")}})
+                           **{k: add.get(k) for k in ("note", "per_game", "season", "factor", "basis", "recent", "upcoming", "elig", "hot", "b2b", "b2b_rest")}})
         return new_roster, new_used, games
 
     for _ in range(max(0, int(acquisitions))):
@@ -289,7 +289,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
         # display: the per-game projection the plan used, why, his last games and his games ahead
         side = lambda p: {"id": p["id"], "name": p["name"], "line": p.get("per_game") or p.get("season"),
                           "factor": p.get("factor") or 1, "note": p.get("note") or "", "value": round(values.get(p["id"], 0), 1),
-                          **{k: p.get(k) for k in ("basis", "recent", "upcoming")}}
+                          **{k: p.get(k) for k in ("basis", "recent", "upcoming", "hot", "b2b", "b2b_rest")}}
         lost = {d: l for d, l in drop["games"].items() if d >= day}  # the dropped player's games from that day on
         moves.append({"day": day, "add": side(fa), "drop": side(drop),
                       "games": sorted(games), "why": fa.get("note", ""),

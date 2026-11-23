@@ -685,4 +685,30 @@ sh = server.with_shooting({"FG%": {"score": 0.5}}, {MON: {1: {5: {"FGM": 4, "FGA
 assert sh["FGM"]["score"] == 5 and sh["FGA"]["score"] == 10 and sh["FG%"]["score"] == 0.5, sh
 assert server.with_shooting(None, {}, TODAY, 1) is None
 
+# back-to-backs: rest rate from the season (missed second nights after playing the first), pulled toward the league
+from datetime import datetime as _dt
+sch = lambda *ds: {str(i): {"date": _dt(d.year, d.month, d.day, 19), "team": "BOS"} for i, d in enumerate(ds)}
+D0 = date(2026, 11, 2)
+past_b2b = [D0, D0 + timedelta(1), D0 + timedelta(4), D0 + timedelta(5), D0 + timedelta(8), D0 + timedelta(9)]  # 3 past back-to-backs
+future = [TODAY + timedelta(1), TODAY + timedelta(2)]  # Thu-Fri: Friday is a second night
+rester = NS(playerId=91, name="Rester", schedule=sch(*past_b2b, *future), injuryStatus="ACTIVE", stats={}, year=2027, lineupSlot="UT")
+ironman = NS(playerId=92, name="Ironman", schedule=sch(*past_b2b, *future), injuryStatus="ACTIVE", stats={}, year=2027)
+logline = lambda d: {"date": d.isoformat(), "opp": "BOS", "at": "@", "MIN": 30.0, **{k: 10.0 for k in ("PTS", "REB", "AST", "STL", "BLK", "3PM", "TO", "FGM", "FGA", "FTM", "FTA")}}
+b_logs = {91: [logline(d) for d in past_b2b[::2]], 92: [logline(d) for d in past_b2b]}  # Rester sat all 3 second nights
+assert server.b2b_counts(rester, b_logs[91], TODAY) == (3, 3) and server.b2b_counts(ironman, b_logs[92], TODAY) == (3, 0)
+server.project_players([rester, ironman], {}, NOW, b_logs)
+assert abs(server.b2b_league["rate"] - 0.5) < 1e-9  # 3 misses in 6 chances league-wide
+assert abs(rester.b2b_rest - (3 + 4 * 0.5) / 7) < 1e-9 and abs(ironman.b2b_rest - 2 / 7) < 1e-9  # shrunk toward 50%
+assert server.second_night(rester, future[1]) and not server.second_night(rester, future[0])
+assert server.play_prob(rester, future[0]) == 1 and abs(server.play_prob(rester, future[1]) - (1 - rester.b2b_rest)) < 1e-9
+rows = server.contributions([rester], NOW, MON, MON + timedelta(days=6))
+assert rows[0]["games"] == 2 and abs(rows[0]["PTS"] - rester.proj["PTS"] * (2 - rester.b2b_rest)) < 1e-6, rows  # Friday counts partly
+
+# deeper free-agent pool: the most-owned plus the hottest of the rest over the last 7 days
+fa_ = lambda i, pts: NS(name=f"FA{i}", year=2027, stats={"2027_last_7": {"avg": {"PTS": pts, "FGM": 3, "FGA": 7}}})
+pool_ = [fa_(i, 5) for i in range(server.FA_OWNED)] + [fa_(100 + i, i) for i in range(30)]
+picked = server.pick_free_agents(pool_)
+assert len(picked) == server.FA_OWNED + server.FA_HOT and picked[server.FA_OWNED].name == "FA129" and getattr(picked[-1], "hot", False)
+assert not any(getattr(p, "hot", False) for p in picked[:server.FA_OWNED])
+
 print("ok")

@@ -482,7 +482,7 @@ function matchupCard(d) {
       <div class="mc-labels"><span>You</span><span class="mc-key">thick = actual so far · thin = projected end · green = leading now</span><span>${esc(d.opponent)}</span><span>Win %</span></div>
       ${cats}
       <details class="breakdown"><summary>Per-player breakdown</summary>
-        <p class="muted">Starters in your set ESPN lineup: their projection × games not started yet, added to this week's totals so far. Plays/Sits toggles aren't reflected here.</p>
+        <p class="muted">Starters in your set ESPN lineup: their projection × games not started yet, added to this week's totals so far. Back-to-back second nights count at each player's chance to play${d.b2b && d.b2b.rate != null ? ` (league-wide, players sat ${Math.round(d.b2b.rate * 100)}% of second nights this season)` : ""}. Plays/Sits toggles aren't reflected here.</p>
         ${breakdownTable("You", p.players.mine, p.current.mine, p.mine)}
         ${breakdownTable(d.opponent, p.players.theirs, p.current.theirs, p.theirs)}
       </details></div>
@@ -810,7 +810,8 @@ function moveWhy(m) {
     <li><b>Value</b>: ${sign(addV)} per game × ${m.add_games} = ${sign(+(addV * m.add_games).toFixed(1))}, minus ${sign(dropV)} × ${m.drop_games} = ${sign(+(dropV * m.drop_games).toFixed(1))}
       → <b class="${m.value >= 0 ? "pos" : "neg"}">${sign(m.value)}</b>. Per-game value = his 9-cat line compared with every player in the pool (0 = average).</li>
     <li><b>This week's matchup</b>: ${flips.length ? flips.join(" · ") : "no category changes hands"}${moved.length ? `; your projected totals: ${moved.join(" · ")}` : ""}.</li>
-    <li><b>Projected per game</b>: ${name(m.add)}: ${adjText(m.add)}; ${name(m.drop)}: ${adjText(m.drop)}.</li>
+    <li><b>Projected per game</b>: ${name(m.add)}: ${adjText(m.add)}; ${name(m.drop)}: ${adjText(m.drop)}.
+      Back-to-back second nights count at his chance to play${m.add.b2b ? ` (${name(m.add)} sat ${m.add.b2b[0]} of ${m.add.b2b[1]} this season: ${Math.round((1 - (m.add.b2b_rest || 0)) * 100)}% to play)` : ""}.</li>
     <li><b>Why ${m.kind === "upgrade" ? "an upgrade" : "a stream"}</b>: ${m.kind === "upgrade"
       ? "no pickup helps this week's matchup any more, so this one is for next week: at least +2 value over this week and next, costing this week only categories that are already decided."
       : "raises the categories you're expected to win this week (winning this matchup comes first), while costing at most 4 value over the two weeks."}
@@ -833,7 +834,7 @@ function planCard(s) {
         <div class="rd-legend"><div class="rd-head"><span>Projected per game</span><span>9-cat value</span></div>
           ${[[m.add, "a", "Add", m.games.length, 1], [m.drop, "b", m.ir ? "Move to IR:" : "Drop", m.drop_week, -1]].map(([x, k, verb, n, sign]) => `<div class="rd-who"><span class="sw ${k}" aria-hidden="true"></span>
             <img class="pic sm" src="${headshot(x.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-            <span><b>${verb} ${esc(x.name)}</b><small>${k === "b" && m.ir ? "OUT · stays on your team; frees a roster spot" : n != null ? gamesText(n, sign) : adjText(x)}</small></span>
+            <span><b>${verb} ${esc(x.name)}</b>${x.hot ? ' <span class="pend" title="Among the best free agents over the last 7 days, outside the most-owned">Hot</span>' : ""}<small>${k === "b" && m.ir ? "OUT · stays on your team; frees a roster spot" : n != null ? gamesText(n, sign) : adjText(x)}</small></span>
             <b class="${x.value >= 0 ? "pos" : "neg"}">${x.value >= 0 ? "+" : ""}${(x.value ?? 0).toFixed(1)}</b></div>`).join("")}
           ${m.change ? netLine(m) : ""}
           <p class="muted">Bigger on an axis = better there (TO: fewer). Values: <span class="rd-a">add</span> · drop.</p></div></div>
@@ -1150,12 +1151,13 @@ function lineupBase(d, i) {
   const spots = slots ? slots.length : onTeam.filter(r => !["BE", "IR"].includes(slotOf(r))).length;
   const espnOn = r => !["BE", "IR"].includes(slotOf(r));  // in ESPN's starting lineup that day
   const counted = r => espnOn(r) && avail(r) && !past;     // what the week projection counts for that day
+  const pl = r => (r.play ? r.play[i] : 1);                 // chance he plays that day (< 1 on back-to-back second nights)
   const mv = {};
   if (d.projection && !past) {
     const base = Object.fromEntries(KEYS.map(k => [k, 0]));  // the week without anyone's game that day
-    for (const r of onTeam) if (counted(r)) for (const k of KEYS) base[k] -= r.avg[k] || 0;
+    for (const r of onTeam) if (counted(r)) for (const k of KEYS) base[k] -= (r.avg[k] || 0) * pl(r);
     const e0 = matchupOdds(d, base).expected;
-    for (const r of onTeam.filter(avail)) mv[r.id] = matchupOdds(d, Object.fromEntries(KEYS.map(k => [k, base[k] + (r.avg[k] || 0)]))).expected - e0;
+    for (const r of onTeam.filter(avail)) mv[r.id] = matchupOdds(d, Object.fromEntries(KEYS.map(k => [k, base[k] + (r.avg[k] || 0) * pl(r)]))).expected - e0;
   }
   const score = r => [mv[r.id] ?? 0, r.value ?? 0];
   const better = (a, b) => { const [x, y] = [score(a), score(b)]; return y[0] - x[0] || y[1] - x[1]; };
@@ -1169,7 +1171,7 @@ function lineupBase(d, i) {
   const ins = onTeam.filter(r => avail(r) && suggested.has(r.id) && !espnOn(r));
   const outs = onTeam.filter(r => avail(r) && !suggested.has(r.id) && espnOn(r));
   const outInLineup = onTeam.filter(r => espnOn(r) && hasGame(r) && r.days[i] === "out");  // OUT but in a starting slot
-  return { day, past, hasGame, avail, slotOf, onTeam, slots, spots, espnOn, mv, suggested, ins, outs, outInLineup, better };
+  return { day, past, hasGame, avail, slotOf, onTeam, slots, spots, espnOn, mv, suggested, ins, outs, outInLineup, better, pl };
 }
 
 function lineupView(d) {
@@ -1177,7 +1179,7 @@ function lineupView(d) {
   const anyGame = k => rows.some(r => r.opps[k] && !["off", "out"].includes(r.days[k]));
   let i = days.findIndex(x => iso(x) === lineup.day);
   if (i < 0) i = Math.max(0, days.findIndex((x, k) => iso(x) >= today && anyGame(k)));
-  const { day, past, hasGame: g1, avail: a1, slotOf, onTeam, slots, spots, espnOn, mv, suggested, better } = lineupBase(d, i);
+  const { day, past, hasGame: g1, avail: a1, slotOf, onTeam, slots, spots, espnOn, mv, suggested, better, pl } = lineupBase(d, i);
   const hasGame = r => g1(r), avail = r => a1(r);
   // your choices for this day: {player id: starts?} on top of ESPN's lineup
   const ov = lineup.choice[day] || {};
@@ -1188,7 +1190,7 @@ function lineupView(d) {
   const extra = Object.fromEntries(KEYS.map(k => [k, 0]));
   for (const r of onTeam) {
     const delta = (counts(r, starts(r)) ? 1 : 0) - (counts(r, espnOn(r)) ? 1 : 0);
-    if (delta) for (const k of KEYS) extra[k] += delta * (r.avg[k] || 0);
+    if (delta) for (const k of KEYS) extra[k] += delta * (r.avg[k] || 0) * pl(r);
   }
   const playingNow = onTeam.filter(r => starts(r) && avail(r));
   const valid = !slots || fitsLineup(playingNow.map(r => r.elig || []), slots);
@@ -1205,7 +1207,8 @@ function lineupView(d) {
     return `<tr class="${starts(r) !== espnOn(r) ? "lu-change" : ""}${g ? "" : " lu-idle"}">
       <td class="lu-slot">${slotName(slotOf(r))}</td>
       <th scope="row"><img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"> ${esc(r.name)}${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}
-        <small>${esc(r.team)} · ${esc((r.elig || []).filter(x => ["PG", "SG", "SF", "PF", "C"].includes(x)).join(", "))}</small></th>
+        <small>${esc(r.team)} · ${esc((r.elig || []).filter(x => ["PG", "SG", "SF", "PF", "C"].includes(x)).join(", "))}${g && pl(r) < 1
+          ? ` · <span class="pend" title="Second night of a back-to-back; sat ${r.b2b ? `${r.b2b[0]} of ${r.b2b[1]}` : "?"} this season">B2B · ${Math.round(pl(r) * 100)}% to play</span>` : ""}</small></th>
       <td>${g ? esc(r.opps[i]) : "—"}</td><td>${toggle}</td><td class="${sug === "Start" ? "pos" : "neg"}">${sug}</td>
       ${g ? cols.map(c => `<td>${perGame(c, r.avg[c] || 0)}</td>`).join("") + `<td>${perGame("FG%", lineVal(r.avg, "FG%"))}</td><td>${perGame("FT%", lineVal(r.avg, "FT%"))}</td>
         <td>${mv[r.id] != null ? `+${mv[r.id].toFixed(2)}` : "—"}</td>
