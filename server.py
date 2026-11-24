@@ -567,6 +567,7 @@ def project_players(players, news, now, logs=None):
     """The site's one projection recipe, stored on each player for every page to use: per-game line =
     recent-games blend (backtest.site: 60% season / 40% last-7-games per-minute rates x minutes in his last 3 games)
     x role-news factor for news newer than his last game. Without a game log (ESPN down), the ESPN season average."""
+    fill_return_dates(players)
     # back-to-back rest: each player's own record, pulled toward the rate of everyone projected here
     counts = {p.playerId: b2b_counts(p, (logs or {}).get(p.playerId) or [], now.date()) for p in players} if logs else {}
     n, m = sum(c for c, _ in counts.values()), sum(x for _, x in counts.values())
@@ -1570,10 +1571,34 @@ def cached(key, ttl, fetch):
 INJURIES_URL = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
 
 
+def injury_report():
+    """ESPN's NBA injury report, every team: [(name, status, return date or None)], cached 10 minutes."""
+    def parse():
+        out = []
+        for t in get_json(INJURIES_URL).get("injuries", []):
+            for i in t.get("injuries", []):
+                back = (i.get("details") or {}).get("returnDate")
+                out.append((i["athlete"]["displayName"], i.get("status"), date.fromisoformat(back[:10]) if back else None))
+        return out
+    return cached("injury_report", 600, parse)
+
+
 def injured_out():
-    """Names of every NBA player ESPN lists as Out right now (all teams), cached 10 minutes."""
-    return cached("injuries", 600, lambda: {i["athlete"]["displayName"] for t in get_json(INJURIES_URL).get("injuries", [])
-                                            for i in t.get("injuries", []) if i.get("status") == "Out"})
+    """Names of every NBA player ESPN lists as Out right now (all teams)."""
+    return {name for name, status, _ in injury_report() if status == "Out"}
+
+
+def fill_return_dates(players):
+    """ESPN's fantasy data often has no expected return date for an OUT player; take it from ESPN's injury report."""
+    missing = [p for p in players if p.injuryStatus == "OUT" and not getattr(p, "expected_return_date", None)]
+    if not missing:
+        return
+    try:
+        back = {name: d for name, _, d in injury_report() if d}
+    except Exception:
+        return  # without the report, OUT stays out all week
+    for p in missing:
+        p.expected_return_date = back.get(p.name)
 
 
 def get_json(url):

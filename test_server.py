@@ -103,7 +103,7 @@ except HTTPException as e:
     assert e.status_code == 502 and "ESPN_S2" in e.detail, e.detail
 server.League = real_league
 
-server._live["injuries"] = (1e12, {"Kevin Durant"})  # ESPN's injury list (Out), pre-filled so tests stay offline
+server._live["injury_report"] = (1e12, [("Kevin Durant", "Out", None)])  # ESPN's injury list (Out), pre-filled so tests stay offline
 # news: one player's failure doesn't drop the others; HTML cleaned
 def fake_news(pid):
     if pid == 2:
@@ -134,7 +134,7 @@ item = server.player_news(NS(espn_request=NS(get_player_news=sub)), [me.roster[0
 assert item["while_out"] == "Kevin Durant" and item["until"], item
 fac, why = server.role_factor(None, [item], datetime(2026, 11, 20))
 assert fac == 1.2 and "Kevin Durant still out" in why[0], why
-server._live["injuries"] = (1e12, set())  # Durant is back: the one-game news expires again
+server._live["injury_report"] = (1e12, [])  # Durant is back: the one-game news expires again
 server._news.clear()
 item = server.player_news(NS(espn_request=NS(get_player_news=sub)), [me.roster[0]])[1][0]
 assert item["while_out"] is None and server.role_factor(None, [item], datetime(2026, 11, 20))[0] == 1.0
@@ -722,5 +722,12 @@ assert set(server.game_lines(fox, None, None, NOW, MON, MON + timedelta(days=6))
 fox.expected_return_date = None
 assert server.out_on(fox, FRI) and server.contributions([fox], NOW, MON, MON + timedelta(days=6)) == []  # no date: out all week
 assert server.day_state(fox, None, FRI, TODAY) == "out"
+
+# return dates missing from the fantasy data come from ESPN's injury report
+server._live["injury_report"] = (1e12, [("Fox", "Out", THU), ("Someone", "Out", None)])
+fox.expected_return_date = None
+server.fill_return_dates([fox])
+assert fox.expected_return_date == THU and not server.out_on(fox, THU)
+server._live.pop("injury_report", None)
 
 print("ok")
