@@ -221,8 +221,17 @@ def daily_slate(roster, team_id, start, end, today, lineups=None):
         if d < today and day is not None:
             counts.append(sum(1 for v in day.values() if v))
         else:
-            counts.append(sum(1 for p in roster if p.injuryStatus != "OUT" and starting(p, team_id, d, lineups) and game_dates(p, d, d)))
+            counts.append(sum(1 for p in roster if not out_on(p, d) and starting(p, team_id, d, lineups) and game_dates(p, d, d)))
     return counts
+
+
+def out_on(p, d):
+    """Is p out on day d? OUT counts only until ESPN's expected return date (out before it, back from it); with no
+    return date, OUT means the whole stretch."""
+    if p.injuryStatus != "OUT":
+        return False
+    back = getattr(p, "expected_return_date", None)
+    return back is None or d < back
 
 
 def day_state(p, team_id, d, today, lineups=None):
@@ -233,7 +242,7 @@ def day_state(p, team_id, d, today, lineups=None):
     day = (lineups or {}).get(d, {}).get(team_id)
     if d < today and day is not None:
         return "bench" if p.playerId not in day else "start" if day[p.playerId] else "dnp"
-    if p.injuryStatus == "OUT":
+    if out_on(p, d):
         return "out"
     return "start" if starting(p, team_id, d, lineups) else "bench"
 
@@ -262,6 +271,7 @@ def planner_rows(roster, team_id, start, end, today, lineups, rosters=None):
              # his ESPN lineup slot each day (PG ... UT, BE, IR); None when he isn't on the team that day
              "dslots": [slot_on(p, team_id, d, rosters) for d in days],
              "play": [round(play_prob(p, d), 2) for d in days],  # < 1 on back-to-back second nights
+             "back": p.expected_return_date.isoformat() if p.injuryStatus == "OUT" and getattr(p, "expected_return_date", None) else None,
              "b2b": getattr(p, "b2b_record", None),  # [missed, chances] this season
              "avg": {k: proj_avg(p).get(k, 0) for k in keep},  # projection (what every page uses)
              "season": {k: season_avg(p).get(k, 0) for k in keep}, "factor": getattr(p, "proj_factor", 1), "why": getattr(p, "proj_why", ""),
@@ -364,21 +374,24 @@ def availability(roster, now, start, end, team_id=None, lineups=None):
         if p.injuryStatus in (None, "", "ACTIVE", "NORMAL"):
             continue
         days = start_days(p, now, start, end, team_id, lineups)
+        if p.injuryStatus == "OUT":
+            days = [d for d in days if out_on(p, d)]  # games after his return date are counted like anyone's
         g = sum(play_prob(p, d) for d in days)
         if days:
             avg = proj_avg(p)
+            back = getattr(p, "expected_return_date", None)
             rows.append({"id": p.playerId, "name": p.name, "status": p.injuryStatus, "games": g, "counted": p.injuryStatus != "OUT",
+                         "back": back.isoformat() if back else None,
                          "line": {k: avg.get(k, 0) * g for k in COUNTING + ["FGM", "FGA", "FTM", "FTA"]}})
     return rows
 
 
 def contributions(roster, now, start, end, team_id=None, lineups=None):
-    """Each starter's projected stats for the rest of the week: season average x starts not played yet. OUT players skip."""
+    """Each starter's projected stats for the rest of the week: projection x starts not played yet. An OUT player counts
+    from his ESPN return date on (not at all without one)."""
     rows = []
     for p in roster:
-        if p.injuryStatus == "OUT":
-            continue
-        days = start_days(p, now, start, end, team_id, lineups)
+        days = [d for d in start_days(p, now, start, end, team_id, lineups) if not out_on(p, d)]
         if not days:
             continue
         avg, eg = proj_avg(p), sum(play_prob(p, d) for d in days)  # back-to-back second nights count as his chance to play
@@ -764,12 +777,10 @@ def start_build(week, fresh=False):
 
 def game_lines(p, team_id, lineups, now, first, last):
     """{date: projected line} for p's games not started yet this week; with a team_id, only days p starts."""
-    if p.injuryStatus == "OUT":
-        return {}
     avg = proj_avg(p)
     line = lambda d: {k: avg.get(k, 0) * play_prob(p, d) for k in streaming.KEYS}  # back-to-backs: his chance to play
     return {x["date"].date(): line(x["date"].date()) for x in p.schedule.values()
-            if now < x["date"] and first <= x["date"].date() <= last
+            if now < x["date"] and first <= x["date"].date() <= last and not out_on(p, x["date"].date())
             and (team_id is None or starting(p, team_id, x["date"].date(), lineups))}
 
 
@@ -921,9 +932,9 @@ def plan_inputs(league, me, opp, now, today, week, first, last, lineups):
     mine = [entry(p, me.team_id) for p in me.roster]
     fa_entries = [entry(p, None, f"{p.name} ({p.proTeam})") for p in fas]
     values = streaming.player_values({e["id"]: e["per_game"] for e in mine + fa_entries + opp_players})
-    # games in next week's matchup; nothing for anyone OUT now, since his return date is unknown
-    next_games = {p.playerId: 0 if p.injuryStatus == "OUT" else
-                  sum(next_first <= x["date"].date() <= next_last for x in p.schedule.values()) for p in me.roster + opp.roster + fas}
+    # games in next week's matchup, from an OUT player's ESPN return date on (none without one)
+    next_games = {p.playerId: sum(next_first <= x["date"].date() <= next_last and not out_on(p, x["date"].date())
+                                  for x in p.schedule.values()) for p in me.roster + opp.roster + fas}
     return mine, opp_players, fa_entries, values, next_games
 
 
