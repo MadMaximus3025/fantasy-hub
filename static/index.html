@@ -734,7 +734,7 @@ function streamView() {
     return `<section class="card">${stream.error ? `<p class="error">Could not load: ${esc(stream.error)}</p>` : '<p class="muted">Loading roster…</p>'}</section>`;
   }
   const s = stream.data, a = s.acquisitions;
-  const acqNote = a.left != null && a.per_period ? `ESPN: ${a.per_period} a day · ${a.left} left this matchup (${a.used} used so far)`
+  const acqNote = a.left != null && a.per_period ? `ESPN: ${a.per_period} per game day · ${a.game_days} game days = ${a.limit} this matchup · ${a.left} left (${a.used} used)`
     : a.left != null ? `ESPN: ${a.left} left this matchup (${a.used} of ${a.limit} used)`
     : a.limit == null ? "ESPN shows no weekly limit; set how many adds to plan" : `Limit ${a.limit} a week; ESPN didn't say how many you've used`;
   const roster = s.roster.map(p => `<div class="drop">
