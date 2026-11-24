@@ -677,6 +677,7 @@ server.fetch_gamelog = lambda pid, season: [g("2026-11-01", 30 if pid == 501 els
 rep = server.calibration_report(cal_league, TODAY)
 assert rep["rows"] == 7 * 9 and set(rep["cats"]) == set(server.streaming.CATS), rep.get("rows")
 assert rep["cats"]["PTS"]["site"]["now"][0] < 0.2 and set(rep["cats"]["FG%"]) == {"site", "full"}, rep["cats"]["PTS"]  # a 30-v-10 week: confident and right
+assert set(rep["rest"]["mae"]["PTS"]) == {"plain", "rest"} and set(rep["rest"]["log_loss"]) == {"plain", "rest"}, rep["rest"]
 server.day_lineups, server.fetch_gamelog = real_dl, real_log
 
 # with_shooting: this week's makes/attempts so far from the daily lineups (days up to today), next to ESPN's totals

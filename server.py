@@ -1127,6 +1127,8 @@ def calibration_report(league, today):
     games_on = {(team, datetime.fromtimestamp(g["date"] / 1000).date())
                 for team, periods in (getattr(league, "pro_schedule", None) or {}).items() for gs in periods.values() for g in gs}
     rows = []  # (cat, my_total, their_total, my_rem, their_rem, outcome, variant totals for % cats)
+    rows_rest = []  # the same, with back-to-back second nights weighted by the chance to play (as known that morning)
+    err = {"plain": {c: [] for c in streaming.COUNTING}, "rest": {c: [] for c in streaming.COUNTING}}  # remaining-total misses
     for w in range(1, league.currentMatchupPeriod):
         first, last = week_dates(league, w, today)
         if last >= today:
@@ -1147,24 +1149,34 @@ def calibration_report(league, today):
                 cut = first + timedelta(days=k)
                 if cut > last:
                     break
+                rest = rest_rates(pids, pro, logs, games_on, cut)
                 side = {}
                 for t in (a, b):
                     so_far = total([st for d in lineups if d < cut for st in (lineups[d].get(t.team_id) or {}).values() if st])
-                    rem_lines = []
+                    actual_rem = total([st for d in lineups if d >= cut for st in (lineups[d].get(t.team_id) or {}).values() if st])
+                    rem_lines, rest_lines = [], []
                     for d in (x for x in lineups if x >= cut):
                         for pid in lineups[d].get(t.team_id) or {}:
                             if (pro.get(pid), d) in games_on:
                                 before = [g for g in logs.get(pid, []) if g["date"] < cut.isoformat()]
                                 if before:
-                                    rem_lines.append(backtest.site(before))
-                    side[t.team_id] = (so_far, total(rem_lines))
-                (sa, ra), (sb, rb) = side[a.team_id], side[b.team_id]
+                                    line = backtest.site(before)
+                                    rem_lines.append(line)
+                                    second = (pro.get(pid), d - timedelta(days=1)) in games_on
+                                    keep = 1 - rest.get(pid, 0) if second else 1
+                                    rest_lines.append({x: v * keep for x, v in line.items()})
+                    side[t.team_id] = (so_far, total(rem_lines), total(rest_lines))
+                    for c in streaming.COUNTING:
+                        err["plain"][c].append(abs(side[t.team_id][1][c] - actual_rem[c]))
+                        err["rest"][c].append(abs(side[t.team_id][2][c] - actual_rem[c]))
+                (sa, ra, ra2), (sb, rb, rb2) = side[a.team_id], side[b.team_id]
                 for c in streaming.CATS:
                     res = final.get(c)
                     if res not in ("WIN", "LOSS", "TIE"):
                         continue
                     y = 1.0 if res == "WIN" else 0.0 if res == "LOSS" else 0.5
                     rows.append((c, k, sa, ra, sb, rb, y))
+                    rows_rest.append((c, k, sa, ra2, sb, rb2, y))
     if not rows:
         return {"rows": 0}
 
@@ -1210,9 +1222,34 @@ def calibration_report(league, today):
                                  "happened": round(sum(y for _, y in inb) / len(inb), 3)})
             res[mode] = {"n": len(rc), "now": loss(now), "best_scale": best, "best": fits[best], "bins": bins}
         out["cats"][c] = res
+    # back-to-back rest weighting: remaining-total misses and win-chance log loss, without vs with it
+    mode = lambda c: "full" if c in ("FG%", "FT%") else "site"
+    out["rest"] = {
+        "mae": {c: {"plain": round(sum(err["plain"][c]) / len(err["plain"][c]), 2),
+                    "rest": round(sum(err["rest"][c]) / len(err["rest"][c]), 2)} for c in streaming.COUNTING if err["plain"][c]},
+        "log_loss": {"plain": loss([(prob(*r[:6], 1.0, mode(r[0])), r[6]) for r in rows])[0],
+                     "rest": loss([(prob(*r[:6], 1.0, mode(r[0])), r[6]) for r in rows_rest])[0]},
+    }
     # how calibration changes through the week (day 0 = Monday morning, all projected)
     out["by_day"] = {k: loss([(prob(*r[:6], 1.0, "site"), r[6]) for r in rows if r[1] == k]) for k in range(7)}
     return out
+
+
+def rest_rates(pids, pro, logs, games_on, cut):
+    """Each player's chance of sitting a back-to-back second night as known on the morning of `cut`: his second nights
+    before then after playing the first night, pulled toward the league rate (same recipe as project_players)."""
+    by_team = {}
+    for t, x in games_on:
+        by_team.setdefault(t, set()).add(x)
+    counts = {}
+    for pid in pids:
+        played = {g["date"] for g in logs.get(pid, []) if g["date"] < cut.isoformat()}
+        dates = by_team.get(pro.get(pid), set())
+        chances = [d for d in dates if d < cut and d - timedelta(days=1) in dates and (d - timedelta(days=1)).isoformat() in played]
+        counts[pid] = (len(chances), sum(d.isoformat() not in played for d in chances))
+    n, m = sum(c for c, _ in counts.values()), sum(x for _, x in counts.values())
+    prior = m / n if n else 0.0
+    return {pid: (x + B2B_PRIOR_WEIGHT * prior) / (c + B2B_PRIOR_WEIGHT) for pid, (c, x) in counts.items()}
 
 
 def types_ns(**kw):
