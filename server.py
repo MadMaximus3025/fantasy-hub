@@ -860,7 +860,7 @@ def ir_open(league, roster):
     return max(0, getattr(league, "_ir_slots", 0) - used), {p.playerId for p in roster if p.injuryStatus == "OUT" and p.lineupSlot != "IR"}
 
 
-def acquisitions_left(league, me, first, last, week):
+def acquisitions_left(league, me, first, last, week, today=None):
     """Weekly add limit, adds used this matchup and adds left, plus what they were read from so the page can show it.
     Used = your free-agent and waiver adds dated inside the matchup, from ESPN's league activity log."""
     limit = league.settings.matchup_acquisition_limit
@@ -878,6 +878,10 @@ def acquisitions_left(league, me, first, last, week):
         info["counted"] = [m for m in mine if first.isoformat() <= m["date"] <= last.isoformat()]
         info["recent"] = mine[:5]  # your latest adds whatever their date, to check the week's dates
         info["used"] = len(info["counted"])
+        if per_period:  # a per-day limit: what's left is each remaining day's own allowance, today included
+            today = today or datetime.now().date()
+            info["left"] = sum(max(0, per_period - sum(m["date"] == d.isoformat() for m in info["counted"]))
+                               for d in days_between(max(today, first), last))
     except Exception as e:
         info["errors"].append(f"activity log: {e}")
     try:  # ESPN's own per-matchup counter, shown next to our count for comparison
@@ -887,7 +891,7 @@ def acquisitions_left(league, me, first, last, week):
                            "by_week": counter.get("matchupAcquisitionTotals"), "season": counter.get("acquisitions")}
     except Exception as e:
         info["errors"].append(f"team counter: {e}")
-    if info["limit"] is not None and info["used"] is not None:
+    if info["limit"] is not None and info["used"] is not None and info["left"] is None:
         info["left"] = max(0, info["limit"] - info["used"])
     return info
 
@@ -976,7 +980,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
         opp_rem=streaming.remaining(opp_players),
         lineup=lineup_slots(league),
-        ir_spots=ir_spots, ir_ids=ir_ids,
+        ir_spots=ir_spots, ir_ids=ir_ids, per_day=acquisitions["per_period"],
         opp_worst={"totals": his_plan["after"]["mine"], "rem": his_rem} if his_plan["moves"] else None,
         protect=protect_weight(league, opp, today)[0],
     )
