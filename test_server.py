@@ -355,8 +355,8 @@ assert info["counter"] == {"this_week": 1, "by_week": {"5": 1}, "season": 9} and
 # your league: limit 1 "per scoring period" -> 1 x 7 days = 7 this matchup; 1 add so far -> 6 left
 daily_league = NS(settings=NS(matchup_acquisition_limit=1.0, matchup_limit_per_scoring_period=True),  # ESPN sends a float
                   recent_activity=lambda size: [acts[0]], espn_request=NS(league_get=lambda params: teams_raw))
-info = server.acquisitions_left(daily_league, me, MON, MON + timedelta(days=6), 5)
-assert (info["limit"], info["per_period"], info["used"], info["left"]) == (7, 1, 1, 6), info
+info = server.acquisitions_left(daily_league, me, MON, MON + timedelta(days=6), 5, today=TODAY)
+assert (info["limit"], info["per_period"], info["used"], info["left"]) == (7, 1, 1, 4), info  # 1 a day: Wed used, Thu-Sun left
 assert all(type(info[k]) is int for k in ("limit", "per_period", "used", "left")), info  # range() in the planner needs ints
 broken = server.acquisitions_left(NS(settings=NS(matchup_acquisition_limit=-1), recent_activity=lambda size: 1 / 0,
                                      espn_request=NS(league_get=lambda params: {})), me, MON, MON, 5)

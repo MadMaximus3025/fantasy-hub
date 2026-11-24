@@ -138,6 +138,14 @@ early = st.odds({**wk, "FG%": .43}, {**wk, "FG%": .41}, {"FGA": 100}, {"FGA": 10
 late = st.odds({**wk, "FG%": .43}, {**wk, "FG%": .41}, {"FGA": 5}, {"FGA": 5})["FG%"]      # nearly all banked
 assert 0.5 < early < late < 1, (early, late)  # the same lead is safer once the attempts are in
 
+# a per-day add limit (ESPN's "per scoring period"): never two moves on the same day
+crowd = [{"id": 60 + i, "name": f"T{i}", "lines": {D[1]: big, D[2]: big, D[3]: big}} for i in range(3)]
+roomy = [{"id": 1, "name": "Starter", "games": {D[0]: big}}] + [{"id": 70 + i, "name": f"Bench{i}", "games": {}} for i in range(3)]
+free = st.plan(D, 9, roomy, opp, cur, crowd, droppable={70, 71, 72}, acquisitions=3)
+capped = st.plan(D, 9, roomy, opp, cur, crowd, droppable={70, 71, 72}, acquisitions=3, per_day=1)
+days_used = [m["day"] for m in capped["moves"]]
+assert len(days_used) == len(set(days_used)) and len(capped["moves"]) >= 2, capped["moves"]
+
 # player values: better per-game lines score higher; efficient shooting counts; turnovers hurt
 lines = {1: line(PTS=25, REB=8, AST=6, STL=1, BLK=1, **{"3PM": 3}, TO=2, FGM=9, FGA=17, FTM=4, FTA=5),
          2: line(PTS=8, REB=3, AST=1, TO=1, FGM=3, FGA=9, FTM=1, FTA=2),
