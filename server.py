@@ -860,14 +860,16 @@ def ir_open(league, roster):
     return max(0, getattr(league, "_ir_slots", 0) - used), {p.playerId for p in roster if p.injuryStatus == "OUT" and p.lineupSlot != "IR"}
 
 
-def acquisitions_left(league, me, first, last, week, today=None):
+def acquisitions_left(league, me, first, last, week):
     """Weekly add limit, adds used this matchup and adds left, plus what they were read from so the page can show it.
     Used = your free-agent and waiver adds dated inside the matchup, from ESPN's league activity log."""
     limit = league.settings.matchup_acquisition_limit
     limit = int(limit) if limit and limit > 0 else None  # ESPN may send 1.0; counts must be whole numbers
-    # with ESPN's "per scoring period" flag the setting is per day; it counts toward the matchup as limit x days
+    # with ESPN's "per scoring period" flag the setting is per game day: the matchup allows limit x its days with NBA
+    # games (6 in a week with an empty Thanksgiving), to use on any days
     per_period = limit if limit and getattr(league.settings, "matchup_limit_per_scoring_period", False) else None
-    info = {"limit": per_period * len(days_between(first, last)) if per_period else limit, "per_period": per_period,
+    game_days = sum(1 for n in nba_games(league, first, last) if n) if getattr(league, "pro_schedule", None) else len(days_between(first, last))
+    info = {"limit": per_period * game_days if per_period else limit, "per_period": per_period, "game_days": game_days,
             "used": None, "left": None,
             "counted": [], "recent": [], "counter": None, "errors": []}
     try:
@@ -878,10 +880,6 @@ def acquisitions_left(league, me, first, last, week, today=None):
         info["counted"] = [m for m in mine if first.isoformat() <= m["date"] <= last.isoformat()]
         info["recent"] = mine[:5]  # your latest adds whatever their date, to check the week's dates
         info["used"] = len(info["counted"])
-        if per_period:  # a per-day limit: what's left is each remaining day's own allowance, today included
-            today = today or datetime.now().date()
-            info["left"] = sum(max(0, per_period - sum(m["date"] == d.isoformat() for m in info["counted"]))
-                               for d in days_between(max(today, first), last))
     except Exception as e:
         info["errors"].append(f"activity log: {e}")
     try:  # ESPN's own per-matchup counter, shown next to our count for comparison
@@ -891,7 +889,7 @@ def acquisitions_left(league, me, first, last, week, today=None):
                            "by_week": counter.get("matchupAcquisitionTotals"), "season": counter.get("acquisitions")}
     except Exception as e:
         info["errors"].append(f"team counter: {e}")
-    if info["limit"] is not None and info["used"] is not None and info["left"] is None:
+    if info["limit"] is not None and info["used"] is not None:
         info["left"] = max(0, info["limit"] - info["used"])
     return info
 
@@ -980,7 +978,7 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
         acquisitions=acq if acq is not None else (acquisitions["left"] or 0),
         opp_rem=streaming.remaining(opp_players),
         lineup=lineup_slots(league),
-        ir_spots=ir_spots, ir_ids=ir_ids, per_day=acquisitions["per_period"],
+        ir_spots=ir_spots, ir_ids=ir_ids,
         opp_worst={"totals": his_plan["after"]["mine"], "rem": his_rem} if his_plan["moves"] else None,
         protect=protect_weight(league, opp, today)[0],
     )

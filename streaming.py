@@ -164,7 +164,7 @@ def record(res):
 
 
 def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None,
-         opp_rem=None, lineup=None, ir_spots=0, ir_ids=None, opp_worst=None, protect=PROTECT_WEIGHT, per_day=None):
+         opp_rem=None, lineup=None, ir_spots=0, ir_ids=None, opp_worst=None, protect=PROTECT_WEIGHT):
     """Greedy week plan.
 
     days: remaining dates in order. slots: starting spots per day.
@@ -180,7 +180,6 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     opp_worst: {"totals", "rem"} of the opponent after his best streaming (Scouting's worst case). Then every chance is
     the `protect` blend (default PROTECT_WEIGHT) of "he stands pat" and "he streams hard", so moves that shore up the categories he could
     take count more; moves report the categories they protect.
-    per_day: the league's limit of adds per day (ESPN's "per scoring period" limit); None = no daily limit.
     ir_spots / ir_ids: open IR spots and OUT players not on IR yet. Moving one to IR frees a roster spot like a drop
     (he plays no games either way) but keeps him, so it costs no value; at most ir_spots such moves are made.
     Each step tries every add (today or on one of the free agent's game days) with every allowed drop. This week
@@ -243,8 +242,6 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
             if fa["id"] in taken:
                 continue
             for day in sorted(set(fa["lines"]) | set(days[:1])):  # today too, for upgrades with no games left this week
-                if per_day and sum(d == day for d in added_on.values()) >= per_day:
-                    continue  # that day's adds are used up
                 for drop in roster:
                     if drop["id"] in dropped:
                         continue

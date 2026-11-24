@@ -355,8 +355,13 @@ assert info["counter"] == {"this_week": 1, "by_week": {"5": 1}, "season": 9} and
 # your league: limit 1 "per scoring period" -> 1 x 7 days = 7 this matchup; 1 add so far -> 6 left
 daily_league = NS(settings=NS(matchup_acquisition_limit=1.0, matchup_limit_per_scoring_period=True),  # ESPN sends a float
                   recent_activity=lambda size: [acts[0]], espn_request=NS(league_get=lambda params: teams_raw))
-info = server.acquisitions_left(daily_league, me, MON, MON + timedelta(days=6), 5, today=TODAY)
-assert (info["limit"], info["per_period"], info["used"], info["left"]) == (7, 1, 1, 4), info  # 1 a day: Wed used, Thu-Sun left
+info = server.acquisitions_left(daily_league, me, MON, MON + timedelta(days=6), 5)
+assert (info["limit"], info["per_period"], info["used"], info["left"]) == (7, 1, 1, 6), info  # 1 per day of the week, any day
+thanksgiving = NS(**vars(daily_league), pro_schedule={1: {str(i): [{"date": datetime.combine(MON + timedelta(days=i), datetime.min.time()).timestamp() * 1000 + 19 * 3600e3,
+                                                             "homeProTeamId": 1, "awayProTeamId": 2}]
+                                                         for i in (0, 1, 2, 4, 5, 6)}})  # no games Thursday
+info = server.acquisitions_left(thanksgiving, me, MON, MON + timedelta(days=6), 5)
+assert (info["limit"], info["game_days"], info["left"]) == (6, 6, 5), info  # 1 per game day: 6, minus 1 used
 assert all(type(info[k]) is int for k in ("limit", "per_period", "used", "left")), info  # range() in the planner needs ints
 broken = server.acquisitions_left(NS(settings=NS(matchup_acquisition_limit=-1), recent_activity=lambda size: 1 / 0,
                                      espn_request=NS(league_get=lambda params: {})), me, MON, MON, 5)
