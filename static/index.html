@@ -464,7 +464,7 @@ function matchupCard(d) {
   const av = d.projection.availability || { mine: [], theirs: [] };
   const who = (rows, label) => `<div class="who"><h3>${label}</h3>${rows.length ? rows.map(a => `<div class="who-row">
       <img class="pic sm" src="${headshot(a.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-      <span><b>${esc(a.name)}</b><small>${esc(a.status.replace("_", " "))} · ${a.games} game${a.games === 1 ? "" : "s"} left</small></span>
+      <span><b>${esc(a.name)}</b><small>${esc(a.status.replace("_", " "))}${a.back ? ` · back ${gameDay(a.back)}; ${Math.round(a.games)} game${Math.round(a.games) === 1 ? "" : "s"} before then` : ` · ${a.games} game${a.games === 1 ? "" : "s"} left`}</small></span>
       <button class="switch" role="switch" data-toggle="${a.id}" aria-checked="${isPlaying(a)}" aria-label="${esc(a.name)} plays">${isPlaying(a) ? "Plays" : "Sits"}</button></div>`).join("")
     : '<p class="muted">Everyone healthy.</p>'}</div>`;
   const mine = d.slate.mine, theirs = d.slate.theirs || mine.map(() => 0), max = Math.max(1, ...mine, ...theirs);
@@ -976,7 +976,7 @@ function rosterGuideCard(d) {
   const head = `<tr><th scope="col">Slot</th><th scope="col">Player</th>${days.map((dt, i) => `<th scope="col" class="${i === todayIdx ? "today" : ""}">${dt.toLocaleDateString(undefined, { weekday: "short" })}<small>${i < todayIdx ? "Final" : i === todayIdx ? "Today" : dt.getDate()}</small></th>`).join("")}<th scope="col">Week${c === "Impact" ? "" : " " + c}</th></tr>`;
   const body = shown.map(r => `<tr><td>${esc(r.slot || "–")}</td><th scope="row">
         <img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-        <button class="expand" data-expand="${r.id}" aria-expanded="${planner.open.has(r.id)}">${esc(r.name)} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}${r.pending ? ` <span class="pend">${esc(r.pending)}</span>` : ""}<small>${esc(r.team)}${r.factor && Math.abs(r.factor - 1) >= 0.005 ? ` · proj ×${r.factor.toFixed(2)}` : ""}</small></th>
+        <button class="expand" data-expand="${r.id}" aria-expanded="${planner.open.has(r.id)}">${esc(r.name)} <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.75"/></svg></button>${injTag(r)}${r.pending ? ` <span class="pend">${esc(r.pending)}</span>` : ""}<small>${esc(r.team)}${r.factor && Math.abs(r.factor - 1) >= 0.005 ? ` · proj ×${r.factor.toFixed(2)}` : ""}</small></th>
       ${r.days.map((s, i) => cell(r, s, i, c)).join("")}<td class="wk">${week(r, c)}</td></tr>${details(r)}`).join("");
   const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label}</option>`;
   const note = c === "Impact"
@@ -1042,7 +1042,7 @@ function scoutView(d) {
   const rank = r => { const k = order.indexOf(r.slot); return k < 0 ? order.length : k; };
   const rosterRows = [...sc.roster].sort((x, y) => rank(x) - rank(y) || y.value - x.value).map(r => {
     const last = (r.recent || []).map(g => `${+g.PTS}/${+g.REB}/${+g.AST}`).join(" · ");
-    return `<tr><td class="lu-slot">${slotName(r.slot)}</td><th scope="row"><img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"> ${esc(r.name)}${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}${r.pending ? ` <span class="pend">${esc(r.pending)}</span>` : ""}<small>${esc(r.team)}</small></th>
+    return `<tr><td class="lu-slot">${slotName(r.slot)}</td><th scope="row"><img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"> ${esc(r.name)}${injTag(r)}${r.pending ? ` <span class="pend">${esc(r.pending)}</span>` : ""}<small>${esc(r.team)}</small></th>
       <td>${r.games_left}</td><td>${last || "—"}</td><td>${formTag(r.form)}</td><td>${esc((r.top || []).join(", "))}</td>
       <td class="${r.value >= 0 ? "pos" : "neg"}">${r.value >= 0 ? "+" : ""}${r.value.toFixed(1)}</td></tr>`;
   }).join("");
@@ -1115,7 +1115,7 @@ function todayView(d) {
   // 5. health: injured players with a game today or still in the plans, with their latest injury news
   const news = Object.fromEntries((d.roster || []).map(p => [p.id, (p.news || []).find(n => n.kind === "Injury")]));
   const hurt = rows.filter(r => r.injury && (i < 0 || r.opps[i]));
-  items.push(`<li><b>Health:</b> ${hurt.length ? `<ul>${hurt.map(r => `<li>${esc(r.name)} <span class="inj">${esc(r.injury.replace("_", " "))}</span>${news[r.id] ? ` · ${esc(news[r.id].headline)}` : ""}</li>`).join("")}</ul>` : "no injured players with a game."}</li>`);
+  items.push(`<li><b>Health:</b> ${hurt.length ? `<ul>${hurt.map(r => `<li>${esc(r.name)}${injTag(r)}${news[r.id] ? ` · ${esc(news[r.id].headline)}` : ""}</li>`).join("")}</ul>` : "no injured players with a game."}</li>`);
   return `<section class="card wide today"><h2>Today · ${gameDay(today)}</h2><ol class="todo">${items.join("")}</ol>
     <p class="muted">Your morning list: everything here comes from the other pages (Dashboard odds, Lineup suggestion, Streaming plan), so it always agrees with them.</p></section>`;
 }
@@ -1136,6 +1136,8 @@ function fitsLineup(players, slots) {
 }
 
 const isoDay = x => x.toLocaleDateString("en-CA");
+// injury tag: "OUT · back Wed 11/25" when ESPN has a return date
+const injTag = r => r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}${r.back ? ` · back ${gameDay(r.back)}` : ""}</span>` : "";
 
 // Everything both the Lineup and Today pages need for day index i: who's on the team, ESPN's lineup, each player's
 // matchup value and the suggested lineup. Matchup value = categories you're expected to win this week with him starting
@@ -1206,7 +1208,7 @@ function lineupView(d) {
     const sug = g && !out ? (suggested.has(r.id) ? "Start" : "Sit") : "";
     return `<tr class="${starts(r) !== espnOn(r) ? "lu-change" : ""}${g ? "" : " lu-idle"}">
       <td class="lu-slot">${slotName(slotOf(r))}</td>
-      <th scope="row"><img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"> ${esc(r.name)}${r.injury ? ` <span class="inj">${esc(r.injury.replace("_", " "))}</span>` : ""}
+      <th scope="row"><img class="pic sm" src="${headshot(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"> ${esc(r.name)}${injTag(r)}
         <small>${esc(r.team)} · ${esc((r.elig || []).filter(x => ["PG", "SG", "SF", "PF", "C"].includes(x)).join(", "))}${g && pl(r) < 1
           ? ` · <span class="pend" title="Second night of a back-to-back; sat ${r.b2b ? `${r.b2b[0]} of ${r.b2b[1]}` : "?"} this season">B2B · ${Math.round(pl(r) * 100)}% to play</span>` : ""}</small></th>
       <td>${g ? esc(r.opps[i]) : "—"}</td><td>${toggle}</td><td class="${sug === "Start" ? "pos" : "neg"}">${sug}</td>

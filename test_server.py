@@ -712,4 +712,15 @@ picked = server.pick_free_agents(pool_)
 assert len(picked) == server.FA_OWNED + server.FA_HOT and picked[server.FA_OWNED].name == "FA129" and getattr(picked[-1], "hot", False)
 assert not any(getattr(p, "hot", False) for p in picked[:server.FA_OWNED])
 
+# OUT with ESPN's expected return date: out only before it (Fox: out tonight, back Wednesday)
+THU, FRI = TODAY + timedelta(1), TODAY + timedelta(2)
+fox = NS(playerId=95, name="Fox", schedule=sch(TODAY, THU, FRI), injuryStatus="OUT", expected_return_date=THU, stats={}, year=2027,
+         lineupSlot="PG", proj={k: 10.0 for k in server.streaming.KEYS}, b2b_rest=0.0)
+assert server.out_on(fox, TODAY) and not server.out_on(fox, THU) and not server.out_on(fox, FRI)
+assert server.contributions([fox], NOW, MON, MON + timedelta(days=6))[0]["games"] == 2  # Thu + Fri, not tonight
+assert set(server.game_lines(fox, None, None, NOW, MON, MON + timedelta(days=6))) == {THU, FRI}  # Streaming: from his return on
+fox.expected_return_date = None
+assert server.out_on(fox, FRI) and server.contributions([fox], NOW, MON, MON + timedelta(days=6)) == []  # no date: out all week
+assert server.day_state(fox, None, FRI, TODAY) == "out"
+
 print("ok")
