@@ -806,7 +806,7 @@ def league_order(roster, today):
 FA_OWNED, FA_HOT = 60, 20  # the planner looks at the most-owned free agents plus the best of the rest over the last 7 days
 
 
-def free_agents(league, size=150):
+def free_agents(league, size=150, pick=True):
     """Free agents (not waivers: those can't be added the same day), with their NBA schedule attached: the FA_OWNED
     most-owned plus the FA_HOT best of the next ones by ESPN's last-7-days averages (hot players few own yet; marked hot)."""
     filters = {"players": {"filterStatus": {"value": ["FREEAGENT"]}, "limit": size,
@@ -820,7 +820,7 @@ def free_agents(league, size=150):
             players.append(Player(p, league.year, league.pro_schedule))
         except Exception:
             logging.exception("Skipped a free agent ESPN sent in an unexpected shape")  # one bad entry shouldn't sink the plan
-    return pick_free_agents(players)
+    return pick_free_agents(players) if pick else players
 
 
 def pick_free_agents(players):
@@ -910,11 +910,12 @@ def matchup_setup(league, me):
     return now, today, week, first, last, opp, my_cats, opp_cats, lineups
 
 
-def plan_inputs(league, me, opp, now, today, week, first, last, lineups):
+def plan_inputs(league, me, opp, now, today, week, first, last, lineups, all_fas=False):
     """Planner entries for both rosters and the healthy free agents, all with the site's projection, plus per-game
-    values and next week's games: (mine, opponent's, free agents, values, next_games)."""
+    values and next week's games: (mine, opponent's, free agents, values, next_games). all_fas: the 150 most-owned,
+    not just the planner's shortlist."""
     # only healthy free agents: OUT, injured reserve, day-to-day or suspended players can't be counted on to play
-    fas = [p for p in free_agents(league) if healthy(p)]
+    fas = [p for p in free_agents(league, pick=not all_fas) if healthy(p)]
     news = player_news(league, me.roster + fas + opp.roster)  # same recipe for both teams and free agents
     project_players(me.roster + fas + opp.roster, news, now, game_logs(me.roster + fas + opp.roster))
     next_first, next_last = week_dates(league, week + 1, today)
@@ -987,6 +988,57 @@ def stream(drops: Annotated[str, Query(max_length=400)] = "", acq: Annotated[int
     for r in out["roster"]:  # overall value next to each name helps decide who is safe to drop
         r["value"] = round(values.get(r["id"], 0), 1)
     return out
+
+
+_whatif = {}  # "inputs" -> (time, everything the page scores against); each try reuses it for 2 minutes
+WHATIF_SECONDS = 120
+
+
+def whatif_inputs():
+    hit = _whatif.get("inputs")
+    if hit and time.time() - hit[0] < WHATIF_SECONDS:
+        return hit[1]
+    league, me = connect()
+    now, today, week, first, last, opp, my_cats, opp_cats, lineups = matchup_setup(league, me)
+    if not opp:
+        raise HTTPException(404, "No matchup this week.")
+    keepers = [p for p in me.roster if not hasattr(p, "pending_until")]
+    mine, opp_players, fa_entries, values, next_games = plan_inputs(league, me, opp, now, today, week, first, last, lineups, all_fas=True)
+    keep_ids = {p.playerId for p in keepers}
+    value = {"week": {"number": week, "start": first.isoformat(), "end": last.isoformat()}, "opponent": opp.team_name,
+             "days": days_between(max(today, first), last),
+             "slots": sum(1 for p in me.roster if p.lineupSlot not in ("BE", "IR") and not hasattr(p, "pending_from")),
+             "mine": [e for e in mine if e["id"] in keep_ids], "fas": fa_entries, "values": values,
+             "current": scores(my_cats), "opp_totals": streaming.totals(scores(opp_cats), opp_players),
+             "opp_rem": streaming.remaining(opp_players), "lineup": lineup_slots(league),
+             "acquisitions": acquisitions_left(league, me, first, last, week)}
+    _whatif["inputs"] = (time.time(), value)
+    return value
+
+
+@app.get("/api/whatif")
+def whatif(moves: Annotated[str, Query(max_length=600)] = "", refresh: bool = False):
+    """Score your own add/drop combo for this week: moves = "addId:dropId:YYYY-MM-DD,..." (empty: the choices only).
+    Same projections, lineup fitting and odds as the Streaming planner (without the opponent's streaming blend)."""
+    if refresh:
+        _whatif.clear()
+    x = whatif_inputs()
+    try:
+        parsed = [(int(a), int(b), date.fromisoformat(d)) for a, b, d in (m.split(":") for m in moves.split(",") if m.strip())]
+    except ValueError:
+        raise HTTPException(400, "moves must look like addId:dropId:YYYY-MM-DD, comma-separated")
+    try:
+        res = streaming.what_if(x["days"], x["slots"], x["mine"], x["opp_totals"], x["current"], x["fas"], parsed,
+                                x["opp_rem"], x["lineup"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    v = lambda i: round(x["values"].get(i, 0), 1)
+    return {"week": x["week"], "opponent": x["opponent"], "days": x["days"], "acquisitions": x["acquisitions"],
+            "roster": [{"id": e["id"], "name": e["name"], "value": v(e["id"]), "games": sorted(e["games"])} for e in x["mine"]],
+            "free_agents": sorted(({"id": e["id"], "name": e["name"], "value": v(e["id"]), "hot": e["hot"],
+                                    "games": sorted(d for d in e["lines"] if d in x["days"])} for e in x["fas"]),
+                                  key=lambda e: -e["value"] * len(e["games"])),  # most value this week first
+            **res}
 
 
 _scout = {}  # week -> (time, report); a report downloads every free agent's game log, so keep it 5 minutes

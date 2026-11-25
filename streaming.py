@@ -163,6 +163,71 @@ def record(res):
     return f'{sum(r == "W" for r in res.values())}-{sum(r == "L" for r in res.values())}-{sum(r == "T" for r in res.values())}'
 
 
+def apply_move(roster, used, add, drop, day, slots, lineup=None):
+    """(new roster, new slot use per day, the pickup's counted games) after dropping `drop` and adding `add` on `day`
+    (both from that day on). The pickup's game counts only on days he fits next to that day's starters."""
+    new_used = dict(used)
+    new_roster = []
+    for p in roster:
+        if p["id"] == drop["id"]:
+            for d in p["games"]:
+                if d >= day:
+                    new_used[d] -= 1
+            p = dict(p, games={d: line for d, line in p["games"].items() if d < day})
+        new_roster.append(p)
+    games = {}
+    for d, line in add["lines"].items():
+        if d < day or d not in new_used:
+            continue
+        if lineup and add.get("elig") is not None:  # positions: he must fit next to that day's starters
+            starters = [p.get("elig") or [] for p in new_roster if d in p["games"]]
+            ok = fits(starters + [add["elig"]], lineup) if fits(starters, lineup) else new_used[d] < slots
+        else:
+            ok = new_used[d] < slots  # only counts on days a starting spot is free
+        if ok:
+            games[d] = line
+            new_used[d] += 1
+    new_roster.append({"id": add["id"], "name": add["name"], "games": games,
+                       **{k: add.get(k) for k in ("note", "per_game", "season", "factor", "basis", "recent", "upcoming", "elig", "hot", "b2b", "b2b_rest")}})
+    return new_roster, new_used, games
+
+
+def what_if(days, slots, mine, opp_totals, current, free_agents, moves, opp_rem=None, lineup=None):
+    """Your own add/drop combo, scored like the planner's: moves = [(add id, drop id, day)], applied in day order
+    (a drop may be someone added by an earlier move). Returns before/after totals, each category's win chance,
+    expected categories and matchup win chance, and what each move counted. Raises ValueError on a bad move."""
+    roster = [dict(p, games=dict(p["games"])) for p in mine]
+    used = {d: sum(d in p["games"] for p in roster) for d in days}
+    pool = {f["id"]: f for f in free_agents}
+    side = lambda r: (lambda t, prob: {"mine": t, "prob": prob, "result": result(t, opp_totals), "record": record(result(t, opp_totals)),
+                                       "expected": round(sum(prob.values()), 2), "win": round(win_chance(prob), 3)})(
+        totals(current, r), odds(totals(current, r), opp_totals, remaining(r), opp_rem))
+    before, done, taken, gone = side(roster), [], set(), set()
+    for add_id, drop_id, day in sorted(moves, key=lambda m: m[2]):
+        add = pool.get(add_id)
+        drop = next((p for p in roster if p["id"] == drop_id and p["id"] not in gone), None)
+        if add is None or add_id in taken:
+            raise ValueError(f"player {add_id} isn't a free agent you can add (or is added twice)")
+        if drop is None:
+            raise ValueError(f"player {drop_id} isn't on your roster by then")
+        if day not in used:
+            raise ValueError(f"{day} isn't a day left in this matchup")
+        if drop_id == add_id or (drop_id in taken and next(m for m in done if m["add_id"] == drop_id)["day"] >= day):
+            raise ValueError(f"{drop['name']} can only be dropped after the day he's added")
+        taken.add(add_id)
+        gone.add(drop_id)
+        lost = {d: l for d, l in drop["games"].items() if d >= day}
+        roster, used, games = apply_move(roster, used, add, drop, day, slots, lineup)
+        done.append({"day": day, "add_id": add_id, "add": add["name"], "drop": drop["name"], "games": sorted(games),
+                     "benched": sorted(d for d in add["lines"] if d >= day and d in used and d not in games),
+                     "drop_games": sorted(lost),
+                     "add_stats": {k: sum(l.get(k, 0) for l in games.values()) for k in KEYS},
+                     "drop_stats": {k: sum(l.get(k, 0) for l in lost.values()) for k in KEYS}})
+    after = side(roster)
+    return {"before": before, "after": after, "moves": done, "theirs": opp_totals,
+            "change": {c: after["mine"][c] - before["mine"][c] for c in CATS}}
+
+
 def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisitions, values=None, next_games=None,
          opp_rem=None, lineup=None, ir_spots=0, ir_ids=None, opp_worst=None, protect=PROTECT_WEIGHT):
     """Greedy week plan.
@@ -208,32 +273,7 @@ def plan(days, slots, mine, opp_totals, current, free_agents, droppable, acquisi
     plain = lambda r: odds(totals(current, r), opp_totals, remaining(r), opp_rem)  # what the pages show
     best_prob = chances(roster)
 
-    def apply(add, drop, day):
-        """New roster and slot use after dropping `drop` and adding `add` on `day` (both from that day on)."""
-        new_used = dict(used)
-        new_roster = []
-        for p in roster:
-            if p["id"] == drop["id"]:
-                for d in p["games"]:
-                    if d >= day:
-                        new_used[d] -= 1
-                p = dict(p, games={d: line for d, line in p["games"].items() if d < day})
-            new_roster.append(p)
-        games = {}
-        for d, line in add["lines"].items():
-            if d < day:
-                continue
-            if lineup and add.get("elig") is not None:  # positions: he must fit next to that day's starters
-                starters = [p.get("elig") or [] for p in new_roster if d in p["games"]]
-                ok = fits(starters + [add["elig"]], lineup) if fits(starters, lineup) else new_used[d] < slots
-            else:
-                ok = new_used[d] < slots  # only counts on days a starting spot is free
-            if ok:
-                games[d] = line
-                new_used[d] += 1
-        new_roster.append({"id": add["id"], "name": add["name"], "games": games,
-                           **{k: add.get(k) for k in ("note", "per_game", "season", "factor", "basis", "recent", "upcoming", "elig", "hot", "b2b", "b2b_rest")}})
-        return new_roster, new_used, games
+    apply = lambda add, drop, day: apply_move(roster, used, add, drop, day, slots, lineup)
 
     for _ in range(max(0, int(acquisitions))):
         pick = None
