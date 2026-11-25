@@ -358,7 +358,7 @@
   <h1 id="team">Loading…<small id="league"></small></h1>
   <div class="refresh">
     <button class="menu-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="pages"><svg class="i-open" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><svg class="i-close" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></button>
-    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#today">Today</a><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#scout">Scouting</a><a class="button" href="#accuracy">Track record</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
+    <nav class="nav-row" id="pages" aria-label="Pages"><a class="button" href="#today">Today</a><a class="button" href="#">Dashboard</a><a class="button" href="#planner">Planner</a><a class="button" href="#lineup">Lineup</a><a class="button" href="#streaming">Streaming</a><a class="button" href="#whatif">What if</a><a class="button" href="#scout">Scouting</a><a class="button" href="#accuracy">Track record</a><button id="refresh" class="ghost">Refresh</button><button id="theme" class="ghost" type="button"></button></nav>
     <small id="updated" aria-live="polite"></small>
   </div>
 </header>
@@ -753,6 +753,95 @@ function streamView() {
     ${stream.error ? `<p class="error">${esc(stream.error)}</p>` : ""}</section>`;
   return `<div class="stack">${setup}</div><div class="stack">${planCard(s)}</div>`;
 }
+
+// ---- What if page (#whatif): score your own add/drop combo for this week ----
+const wi = { data: null, rows: [], loading: false, error: null, seq: 0 };
+
+async function loadWhatif(refresh = false) {
+  wi.loading = true;
+  const seq = ++wi.seq;  // only the latest request's answer is shown
+  if (location.hash === "#whatif" && lastData) render(lastData);
+  try {
+    const q = new URLSearchParams({ moves: wi.rows.filter(r => r.add && r.drop && r.day).map(r => `${r.add}:${r.drop}:${r.day}`).join(",") });
+    if (refresh) q.set("refresh", "true");
+    const r = await fetch("/api/whatif?" + q);
+    const j = await r.json().catch(() => ({ detail: `${r.status} ${r.statusText}` }));
+    if (seq !== wi.seq) return;
+    if (!r.ok) throw new Error(j.detail);
+    wi.data = j; wi.error = null;
+  } catch (e) {
+    if (seq !== wi.seq) return;
+    wi.error = e.message;
+  }
+  wi.loading = false;
+  if (location.hash === "#whatif" && lastData) render(lastData);
+}
+
+function whatifView() {
+  const d = wi.data;
+  if (!d) {
+    if (!wi.loading && !wi.error) loadWhatif();
+    return `<section class="card wide">${wi.error ? `<p class="error">Could not load: ${esc(wi.error)}</p>` : '<p class="muted">Loading your roster and free agents…</p>'}</section>`;
+  }
+  const short = n => n.replace(/ \(\w+\)$/, "");
+  const sign = (c, v) => { const x = c.endsWith("%") ? v.toFixed(3).replace(/^(-?)0/, "$1") : (Math.round(v * 10) / 10).toString(); return (v > 0 ? "+" : "") + x; };
+  const good = (c, v) => Math.abs(v) < 1e-9 ? "" : (c === "TO" ? v < 0 : v > 0) ? "pos" : "neg";
+  const opt = (v, label, sel) => `<option value="${v}"${String(sel) === String(v) ? " selected" : ""}>${esc(label)}</option>`;
+  const days = d => d.map(x => gameDay(x).split(",")[0]).join(" ");
+  const rows = wi.rows.map((r, i) => {
+    const earlier = wi.rows.slice(0, i).map(x => d.free_agents.find(f => String(f.id) === String(x.add))).filter(Boolean);
+    const dropOpts = d.roster.map(p => opt(p.id, `${p.name} · value ${p.value} · ${p.games.length} games left`, r.drop))
+      + earlier.map(f => opt(f.id, `${short(f.name)} (added above)`, r.drop)).join("");
+    const addOpts = d.free_agents.map(f => opt(f.id, `${f.name}${f.hot ? " 🔥" : ""} · value ${f.value} · ${f.games.length} games${f.games.length ? ": " + days(f.games) : ""}`, r.add)).join("");
+    return `<div class="acq" style="flex-wrap:wrap;gap:8px">
+      <label>Drop <select data-wi="drop" data-i="${i}"><option value="">pick a player</option>${dropOpts}</select></label>
+      <label>Add <select data-wi="add" data-i="${i}"><option value="">pick a free agent</option>${addOpts}</select></label>
+      <label>On <select data-wi="day" data-i="${i}">${d.days.map(x => opt(x, gameDay(x), r.day)).join("")}</select></label>
+      <button class="ghost" data-wi-remove="${i}" type="button">Remove</button></div>`;
+  }).join("");
+  const a = d.acquisitions || {};
+  const used = wi.rows.filter(r => r.add && r.drop).length;
+  const over = a.left != null && used > a.left ? `<p class="error">That's ${used} adds; ESPN shows ${a.left} left this matchup.</p>` : "";
+  const setup = `<section class="card wide"><h2>What if… <small>${esc(d.opponent || "")} · week ${d.week.number}</small></h2>
+    <p class="muted">Pick who to drop, who to add and the day you'd make the move. The page projects the rest of the week with and without it, using the same projections, lineup fit and odds as the Streaming planner.${a.left != null ? ` ${a.left} adds left this matchup.` : ""}</p>
+    ${rows || '<p class="muted">No moves yet.</p>'}
+    <p><button data-wi-new type="button">Add a move</button> <button class="ghost" data-wi-refresh type="button">Reload from ESPN</button>
+    <span class="muted" aria-live="polite">${wi.loading ? "Scoring…" : ""}</span></p>${over}
+    ${wi.error ? `<p class="error">${esc(wi.error)}</p>` : ""}</section>`;
+  const B = d.before, A = d.after, T = d.theirs;
+  const pc = x => Math.round(x * 100) + "%";
+  const table = `<div class="h2h-scroll"><table><thead><tr><th scope="col">Cat</th><th scope="col">Projected now</th><th scope="col">With moves</th><th scope="col">Net</th><th scope="col">${esc(d.opponent || "Opponent")}</th><th scope="col">Win chance</th></tr></thead><tbody>
+    ${CATS9.map(c => `<tr><th scope="row">${c}</th><td>${fmt(c, B.mine[c])}</td><td><b>${fmt(c, A.mine[c])}</b></td>
+      <td class="diff ${good(c, d.change[c])}">${sign(c, d.change[c])}</td><td>${fmt(c, T[c])}</td>
+      <td>${pc(B.prob[c])} → <b class="${good("", A.prob[c] - B.prob[c])}">${pc(A.prob[c])}</b></td></tr>`).join("")}
+    <tr class="sum"><th scope="row">Result</th><td>${B.record.replace(/-0$/, "")}</td><td><b>${A.record.replace(/-0$/, "")}</b></td><td></td><td></td><td></td></tr></tbody></table></div>`;
+  const de = A.expected - B.expected;
+  const verdict = !d.moves.length ? "Add a move to see what it does." : `<b class="${good("", de)}">${de >= 0 ? "+" : ""}${de.toFixed(2)} categories expected</b> (${B.expected.toFixed(1)} → ${A.expected.toFixed(1)}) · matchup win chance ${pc(B.win)} → <b>${pc(A.win)}</b>`;
+  const moves = d.moves.map(m => `<li><b>${gameDay(m.day)}:</b> add ${esc(short(m.add))}, drop ${esc(short(m.drop))}.
+    ${esc(short(m.add))} counts ${m.games.length} game${m.games.length === 1 ? "" : "s"}${m.games.length ? ` (${days(m.games)})` : ""}${m.benched.length ? `; ${m.benched.length} on the bench, lineup full (${days(m.benched)})` : ""}.
+    ${esc(short(m.drop))} loses ${m.drop_games.length} game${m.drop_games.length === 1 ? "" : "s"}${m.drop_games.length ? ` (${days(m.drop_games)})` : ""}.</li>`).join("");
+  const result = `<section class="card wide"><h2>This week with your moves</h2><p>${verdict}</p>${moves ? `<ul>${moves}</ul>` : ""}${table}
+    <p class="muted">Net = with moves − projected now. TO: fewer is better. Totals = this week so far + every projected start left. The opponent is projected standing pat.</p></section>`;
+  return setup + result;
+}
+
+$("#app").addEventListener("change", e => {
+  const el = e.target.closest("[data-wi]");
+  if (!el) return;
+  const r = wi.rows[+el.dataset.i];
+  r[el.dataset.wi] = el.value;
+  if (el.dataset.wi === "add") {  // move on his first game day still to come
+    const f = wi.data.free_agents.find(x => String(x.id) === el.value);
+    if (f?.games.length) r.day = f.games[0];
+  }
+  loadWhatif();
+});
+$("#app").addEventListener("click", e => {
+  if (e.target.closest("[data-wi-new]")) { wi.rows.push({ add: "", drop: "", day: wi.data.days[0] }); return render(lastData); }
+  const rm = e.target.closest("[data-wi-remove]");
+  if (rm) { wi.rows.splice(+rm.dataset.wiRemove, 1); return loadWhatif(); }
+  if (e.target.closest("[data-wi-refresh]")) loadWhatif(true);
+});
 
 // Shows where the adds-left number came from, so a wrong count can be traced
 function acqDetails(a, w) {
@@ -1343,10 +1432,10 @@ let lastData = null;
 
 function render(d) {
   lastData = d;
-  const page = ["#today", "#planner", "#lineup", "#streaming", "#scout", "#accuracy"].includes(location.hash) ? location.hash : "#";
+  const page = ["#today", "#planner", "#lineup", "#streaming", "#whatif", "#scout", "#accuracy"].includes(location.hash) ? location.hash : "#";
   $("#app").classList.toggle("planner", page !== "#");
   document.querySelectorAll(".nav-row a").forEach(a => a.getAttribute("href") === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
-  $("#app").innerHTML = page === "#today" ? todayView(d) : page === "#planner" ? plannerView(d) : page === "#lineup" ? lineupView(d) : page === "#scout" ? scoutView(d) : page === "#streaming" ? streamView() : page === "#accuracy" ? accuracyView()
+  $("#app").innerHTML = page === "#today" ? todayView(d) : page === "#planner" ? plannerView(d) : page === "#lineup" ? lineupView(d) : page === "#scout" ? scoutView(d) : page === "#streaming" ? streamView() : page === "#whatif" ? whatifView() : page === "#accuracy" ? accuracyView()
     : matchupCard(d) + rosterCard(d);
 }
 window.addEventListener("hashchange", () => { closeH2H(); if (lastData) render(lastData); });

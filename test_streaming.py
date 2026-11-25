@@ -145,3 +145,18 @@ lines = {1: line(PTS=25, REB=8, AST=6, STL=1, BLK=1, **{"3PM": 3}, TO=2, FGM=9, 
 v = st.player_values(lines)
 assert v[1] > v[2] > v[3], v
 print("ok")
+
+# what-if: your own combo, scored with the same totals and odds
+w = st.what_if(D, 2, me, opp, cur, fa, [(10, 2, D[1])])
+assert w["after"]["mine"]["PTS"] == cur["PTS"] + 20 + 2 + 60, w["after"]  # Scrub keeps his Thursday game before the drop
+assert w["change"]["PTS"] == 60 and w["moves"][0]["games"] == D[1:], w
+assert w["after"]["expected"] > w["before"]["expected"]
+w2 = st.what_if(D, 2, me, opp, cur, fa, [(10, 2, D[1]), (11, 10, D[2])])  # stream him, then drop him for the dud
+assert w2["after"]["mine"]["PTS"] == cur["PTS"] + 22 + 20 + 0, w2["after"]
+for bad in ([(10, 99, D[1])], [(99, 2, D[1])], [(10, 2, D[1]), (11, 10, D[1])], [(10, 2, D[1]), (11, 2, D[2])]):
+    try:
+        st.what_if(D, 2, me, opp, cur, fa, bad)
+        raise AssertionError(bad)
+    except ValueError:
+        pass
+print("what-if ok")

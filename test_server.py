@@ -376,7 +376,7 @@ server.connect = lambda: (league, me)
 hurt_star = f(52, "Hurt Star", [], injury="OUT", PTS=40, REB=12, AST=10)  # great season value, but out
 dtd = f(53, "Questionable Guy", [4, 5, 6], injury="DAY_TO_DAY", PTS=30)
 flagged = f(54, "Flagged", [4, 5, 6], PTS=30); flagged.injured = True
-server.free_agents = lambda lg: [hurt_star, dtd, flagged, fa]
+server.free_agents = lambda lg, **k: [hurt_star, dtd, flagged, fa]
 server.day_lineups = lambda *a: ({}, {})
 server.acquisitions_left = lambda *a: {"limit": 4, "per_period": None, "used": 2, "left": 2, "counted": []}
 server.datetime = type("D", (datetime,), {"now": classmethod(lambda c, tz=None: NOW)})
@@ -409,6 +409,20 @@ assert abs(sc["now"]["expected"] - sum(sc["now"]["prob"].values())) < 0.02  # ex
 assert {r["name"] for r in sc["roster"]} == {p.name for p in opp.roster} and all("form" in r and "games_left" in r for r in sc["roster"])
 assert server.scout() is sc  # cached
 server._scout.clear()
+# what-if: your own combo, scored like the planner; empty = the choices
+server._whatif.clear()
+w0 = server.whatif()
+assert [e["name"] for e in w0["free_agents"]] == ["Free Guy (ATL)"] and w0["moves"] == [] and 51 in [r["id"] for r in w0["roster"]], w0
+day = w0["free_agents"][0]["games"][0]
+w = server.whatif(moves=f"50:51:{day}")
+assert w["change"]["PTS"] == pl["after"]["mine"]["PTS"] - pl["before"]["mine"]["PTS"] and w["change"]["PTS"] > 0, (w["change"], pl["after"])
+assert w["after"]["expected"] >= w["before"]["expected"] and w["moves"][0]["games"], w
+for bad in ("50:999:" + day.isoformat(), "x:y:z", f"50:51:2020-01-01"):
+    try:
+        server.whatif(moves=bad); assert False, bad
+    except server.HTTPException as e:
+        assert e.status_code == 400, bad
+server._whatif.clear()
 server.connect, server.free_agents, server.day_lineups, server.acquisitions_left, server.datetime = saved
 
 # free agents: an entry that can't be read is skipped, the rest still come back
