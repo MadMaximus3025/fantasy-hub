@@ -1259,6 +1259,30 @@ function lineupBase(d, i) {
     if (pick.length >= spots) break;
     if (!slots || fitsLineup([...pick, r].map(x => x.elig || []), slots)) pick.push(r);
   }
+  // mv scores each player against a day with nobody starting, which can misrank close calls; so swap starters for
+  // bench players while the whole lineup's expected categories go up (the number the totals card shows)
+  if (d.projection && !past) {
+    const expected = set => {
+      const extra = Object.fromEntries(KEYS.map(k => [k, 0]));
+      for (const r of onTeam) {
+        const on = set.includes(r), was = counted(r);
+        if (on !== was) for (const k of KEYS) extra[k] += (on ? 1 : -1) * (r.avg[k] || 0) * pl(r);
+      }
+      return matchupOdds(d, extra).expected;
+    };
+    let best = expected(pick), improved = true;
+    const espn = onTeam.filter(counted);  // never suggest worse than ESPN's lineup: start from it when it's ahead
+    if (espn.length && expected(espn) > best) { pick.splice(0, pick.length, ...espn); best = expected(espn); }
+    while (improved) {
+      improved = false;
+      swap: for (const out of pick) for (const r of onTeam.filter(x => avail(x) && !pick.includes(x))) {
+        const trial = pick.map(x => x === out ? r : x);
+        if (slots && !fitsLineup(trial.map(x => x.elig || []), slots)) continue;
+        const e = expected(trial);
+        if (e > best + 1e-6) { pick.splice(pick.indexOf(out), 1, r); best = e; improved = true; break swap; }
+      }
+    }
+  }
   const suggested = new Set(pick.map(r => r.id));
   const ins = onTeam.filter(r => avail(r) && suggested.has(r.id) && !espnOn(r));
   const outs = onTeam.filter(r => avail(r) && !suggested.has(r.id) && espnOn(r));
